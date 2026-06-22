@@ -64,6 +64,7 @@ class FrappeService {
           'Accept': 'application/json',
           'Content-Type': 'application/json'
         },
+        credentials: 'include',
         body: JSON.stringify({
           usr: usernameOrKey,
           pwd: passwordOrSecret
@@ -79,6 +80,7 @@ class FrappeService {
       // Now fetch user details using the session
       const userRes = await fetch(`${baseUrl}/api/method/frappe.auth.get_logged_user`, {
         method: 'GET',
+        credentials: 'include',
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json'
@@ -97,6 +99,7 @@ class FrappeService {
       try {
         const profileRes = await fetch(`${baseUrl}/api/resource/User/${userEmail}`, {
           method: 'GET',
+          credentials: 'include',
           headers: {
             'Accept': 'application/json',
             'Content-Type': 'application/json'
@@ -154,15 +157,21 @@ class FrappeService {
     if (options.start) queryParams += `&limit_start=${options.start}`;
     if (options.order_by) queryParams += `&order_by=${options.order_by}`;
 
-    const fetchUrl = `${baseUrl}/api/resource/${doctype}?${queryParams.substring(1)}`;
+    const fetchUrl = `${baseUrl}/api/resource/${encodeURIComponent(doctype)}?${queryParams.substring(1)}`;
 
     const response = await fetch(fetchUrl, {
       method: 'GET',
-      headers
+      headers,
+      credentials: 'include'
     });
 
     if (!response.ok) {
-      throw new Error(`ERPNext API Error: ${response.statusText}`);
+      let message = `ERPNext API Error: ${response.statusText}`;
+      try {
+        const errData = await response.json();
+        message = errData.exception || errData.message || errData._server_messages || message;
+      } catch {}
+      throw new Error(message);
     }
 
     const res = await response.json();
@@ -179,22 +188,45 @@ class FrappeService {
       'Accept': 'application/json',
       'Content-Type': 'application/json'
     };
-    const auth = this.getAuthHeader();
-    if (auth) headers['Authorization'] = auth;
 
-    const fetchUrl = docname 
-      ? `${baseUrl}/api/resource/${doctype}/${encodeURIComponent(docname)}`
-      : `${baseUrl}/api/resource/${doctype}`;
+    const auth = this.getAuthHeader();
+    if (auth) {
+      headers['Authorization'] = auth;
+    } else {
+      const csrfToken =
+        window.csrf_token ||
+        window.frappe?.csrf_token ||
+        document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+
+      if (csrfToken) {
+        headers['X-Frappe-CSRF-Token'] = csrfToken;
+        headers['X-CSRF-Token'] = csrfToken;
+      }
+    }
+
+    const fetchUrl = docname
+      ? `${baseUrl}/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(docname)}`
+      : `${baseUrl}/api/resource/${encodeURIComponent(doctype)}`;
 
     const response = await fetch(fetchUrl, {
       method,
       headers,
+      credentials: 'include',
       body: body ? JSON.stringify(body) : null
     });
 
     if (!response.ok) {
-      const errData = await response.json();
-      throw new Error(errData.exception || `ERPNext Request Failed: ${response.statusText}`);
+      let message = `ERPNext Request Failed: ${response.statusText}`;
+      try {
+        const errData = await response.json();
+        message =
+          errData._server_messages ||
+          errData.exception ||
+          errData.exc ||
+          errData.message ||
+          message;
+      } catch {}
+      throw new Error(message);
     }
 
     return await response.json();
@@ -307,17 +339,224 @@ class FrappeService {
     return { success: true, name: `MAT-STE-2026-${Date.now().toString().slice(-5)}` };
   }
 
-  // Fetch items filtered by Finished Goods group
-  async getFinishedGoods(limit = 100) {
+
+  async getStockEntryForWorkOrder(workOrder) {
+    if (!this.connection.isLive) return null;
+
+    const { url } = this.connection;
+    const baseUrl = this.resolveUrl(url);
+
+    const response = await fetch(
+      `${baseUrl}/api/method/islandchill.api.manufacturing.get_stock_entry_for_work_order?work_order=${encodeURIComponent(workOrder)}`,
+      {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json'
+        },
+        credentials: 'include'
+      }
+    );
+
+    if (!response.ok) {
+      let message = 'Failed to fetch Stock Entry draft';
+      try {
+        const err = await response.json();
+        message = err.exception || err.message || err._server_messages || message;
+      } catch {}
+      throw new Error(message);
+    }
+
+    const json = await response.json();
+    return json.message || null;
+  }
+
+  // Save or update Stock Entry Draft through backend Python method.
+  async saveStockEntryDraft(data) {
+    if (!this.connection.isLive) {
+      return {
+        success: true,
+        name: data.stockEntryName || `DEMO-SE-${Date.now().toString().slice(-6)}`
+      };
+    }
+
+    const { url } = this.connection;
+    const baseUrl = this.resolveUrl(url);
+
+    const csrfToken =
+      window.csrf_token ||
+      window.frappe?.csrf_token ||
+      document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ||
+      '';
+
+    const response = await fetch(
+      `${baseUrl}/api/method/islandchill.api.manufacturing.save_stock_entry_draft`,
+      {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'X-Frappe-CSRF-Token': csrfToken,
+          'X-CSRF-Token': csrfToken
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          work_order: data.workOrder,
+          company: data.company,
+          posting_date: data.postingDate,
+          posting_time: data.postingTime,
+          stock_entry_name: data.stockEntryName || '',
+          items: data.items || []
+        })
+      }
+    );
+
+    if (!response.ok) {
+      let message = 'Failed to save Stock Entry draft';
+      try {
+        const err = await response.json();
+        message = err.exception || err.message || err._server_messages || message;
+      } catch {}
+      throw new Error(message);
+    }
+
+    const json = await response.json();
+    return json.message;
+  }
+
+  // Submit saved Stock Entry Draft through backend Python method.
+  async submitStockEntry(stockEntryName) {
+    if (!this.connection.isLive) {
+      return { success: true };
+    }
+
+    const { url } = this.connection;
+    const baseUrl = this.resolveUrl(url);
+
+    const csrfToken =
+      window.csrf_token ||
+      window.frappe?.csrf_token ||
+      document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ||
+      '';
+
+    const response = await fetch(
+      `${baseUrl}/api/method/islandchill.api.manufacturing.submit_stock_entry`,
+      {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'X-Frappe-CSRF-Token': csrfToken,
+          'X-CSRF-Token': csrfToken
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          stock_entry_name: stockEntryName
+        })
+      }
+    );
+
+    if (!response.ok) {
+      let message = 'Failed to submit Stock Entry';
+      try {
+        const err = await response.json();
+        message = err.exception || err.message || err._server_messages || message;
+      } catch {}
+      throw new Error(message);
+    }
+
+    const json = await response.json();
+    return json.message;
+  }
+
+  // Fetch manufacturable items from active submitted BOMs.
+  // This is the safest list for Work Order creation because every returned item has at least one usable BOM.
+  async getManufacturableItems(limit = 300) {
+    if (!this.connection.isLive) return null;
+
+    try {
+      const boms = await this.fetchERP('BOM', {
+        fields: ['name', 'item', 'item_name', 'is_active', 'is_default', 'docstatus'],
+        filters: [
+          ['is_active', '=', 1],
+          ['docstatus', '=', 1]
+        ],
+        limit,
+        order_by: 'is_default desc, modified desc'
+      });
+
+      if (!boms || boms.length === 0) return [];
+
+      const unique = new Map();
+
+      for (const bom of boms) {
+        const code = bom.item;
+        if (!code || unique.has(code)) continue;
+
+        unique.set(code, {
+          code,
+          name: bom.item_name || code,
+          unit: 'Nos',
+          defaultBom: bom.name
+        });
+      }
+
+      const codes = Array.from(unique.keys());
+
+      // Enrich names/UOM from Item if possible. If this fails, BOM data is still enough.
+      try {
+        const items = await this.fetchERP('Item', {
+          fields: ['name', 'item_code', 'item_name', 'stock_uom', 'disabled', 'is_stock_item'],
+          filters: [
+            ['name', 'in', codes],
+            ['disabled', '=', 0]
+          ],
+          limit: codes.length
+        });
+
+        if (items && items.length > 0) {
+          for (const item of items) {
+            const code = item.item_code || item.name;
+            if (unique.has(code)) {
+              unique.set(code, {
+                ...unique.get(code),
+                code,
+                name: item.item_name || unique.get(code).name || code,
+                unit: item.stock_uom || unique.get(code).unit || 'Nos'
+              });
+            }
+          }
+        }
+      } catch (itemErr) {
+        console.warn('Could not enrich manufacturable items from Item doctype:', itemErr);
+      }
+
+      return Array.from(unique.values()).sort((a, b) =>
+        (a.name || a.code).localeCompare(b.name || b.code)
+      );
+    } catch (e) {
+      console.error('Failed to fetch manufacturable items from ERPNext:', e);
+      return [];
+    }
+  }
+
+  // Backward-compatible function used by App.jsx.
+  // First tries manufacturable BOM items; falls back to Finished Goods item group if BOM lookup returns nothing.
+  async getFinishedGoods(limit = 300) {
     if (this.connection.isLive) {
       try {
+        const manufacturable = await this.getManufacturableItems(limit);
+        if (manufacturable && manufacturable.length > 0) return manufacturable;
+
         const res = await this.fetchERP('Item', {
-          fields: ['name', 'item_code', 'item_name', 'item_group', 'stock_uom'],
+          fields: ['name', 'item_code', 'item_name', 'item_group', 'stock_uom', 'disabled', 'is_stock_item'],
           filters: [
-            ['item_group', '=', 'Finished Goods']
+            ['disabled', '=', 0],
+            ['is_stock_item', '=', 1]
           ],
-          limit
+          limit,
+          order_by: 'item_name asc'
         });
+
         if (res && res.length > 0) {
           return res.map(item => ({
             code: item.item_code || item.name,
@@ -325,41 +564,54 @@ class FrappeService {
             unit: item.stock_uom || 'Nos'
           }));
         }
+
         return [];
       } catch (e) {
         console.error('Failed to fetch Finished Goods from ERPNext:', e);
         return [];
       }
     }
+
     return null;
   }
 
-  // Fetch BOMs for specific production item
-  async getBOMsForItem(itemCode, limit = 50) {
+  // Fetch active submitted BOMs for a specific production item.
+  async getBOMsForItem(itemCode, limit = 100) {
     if (this.connection.isLive) {
       try {
+        if (!itemCode) return [];
+
         const res = await this.fetchERP('BOM', {
-          fields: ['name', 'item', 'is_active'],
+          fields: ['name', 'item', 'item_name', 'is_active', 'is_default', 'docstatus', 'quantity', 'uom'],
           filters: [
             ['item', '=', itemCode],
-            ['is_active', '=', 1]
+            ['is_active', '=', 1],
+            ['docstatus', '=', 1]
           ],
-          limit
+          limit,
+          order_by: 'is_default desc, modified desc'
         });
+
         if (res && res.length > 0) {
           return res.map(bom => ({
             id: bom.name,
             name: bom.name,
-            productName: bom.item,
-            active: bom.is_active || 1
+            productName: bom.item_name || bom.item,
+            item: bom.item,
+            active: bom.is_active || 1,
+            isDefault: Boolean(bom.is_default),
+            quantity: bom.quantity,
+            unit: bom.uom || 'Nos'
           }));
         }
+
         return [];
       } catch (e) {
         console.error(`Failed to fetch BOMs for ${itemCode} from ERPNext:`, e);
         return [];
       }
     }
+
     return [];
   }
 
@@ -432,8 +684,11 @@ class FrappeService {
 
     try {
       let erpStatus = 'Open';
-      if (status === 'In Progress') erpStatus = 'Work In Progress';
-      if (status === 'Paused') erpStatus = 'On Hold';
+      if (status === 'Work In Progress' || status === 'In Progress') erpStatus = 'Work In Progress';
+      if (status === 'On Hold' || status === 'Paused') erpStatus = 'On Hold';
+      if (status === 'Material Transferred') erpStatus = 'Material Transferred';
+      if (status === 'Submitted') erpStatus = 'Submitted';
+      if (status === 'Cancelled') erpStatus = 'Cancelled';
       if (status === 'Completed') erpStatus = 'Completed';
 
       const payload = {
@@ -464,6 +719,33 @@ class FrappeService {
       console.error('Failed to sync Job Card to ERPNext:', e);
       return { success: false, error: e.message };
     }
+  }
+
+
+  async forceWorkOrderInProgress(workOrder) {
+    const baseUrl = this.resolveUrl(this.connection.url);
+
+    const response = await fetch(
+      `${baseUrl}/api/method/islandchill.api.manufacturing.force_work_order_in_progress`,
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-Frappe-CSRF-Token': window.csrf_token || window.frappe?.csrf_token || ''
+        },
+        credentials: 'include',
+        body: JSON.stringify({ work_order: workOrder })
+      }
+    );
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => null);
+      throw new Error(err?.exception || err?.message || 'Failed to update Work Order status');
+    }
+
+    const json = await response.json();
+    return json.message;
   }
 
   // Push stock updates to ERPNext (if connected)
@@ -705,10 +987,10 @@ class FrappeService {
 
         if (res && res.length > 0) {
           return res.map(jc => {
-            let appStatus = 'Not Started';
-            if (jc.status === 'Work In Progress' || jc.status === 'Work in Progress') appStatus = 'In Progress';
-            else if (jc.status === 'On Hold') appStatus = 'Paused';
-            else if (jc.status === 'Completed') appStatus = 'Completed';
+            // Keep ERPNext Job Card status names in the frontend.
+            // ERPNext valid statuses include: Open, Work In Progress, Material Transferred, On Hold, Submitted, Cancelled, Completed.
+            let appStatus = jc.status || 'Open';
+            if (appStatus === 'Work in Progress') appStatus = 'Work In Progress';
 
             return {
               id: jc.name,

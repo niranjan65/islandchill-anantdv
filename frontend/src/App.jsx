@@ -304,24 +304,53 @@ function App() {
   const [woBomsList, setWoBomsList] = useState([]);
   const [selectedWoProduct, setSelectedWoProduct] = useState('');
   const [selectedWoBom, setSelectedWoBom] = useState('');
+  const [woProductSearch, setWoProductSearch] = useState('');
+  const [woBomSearch, setWoBomSearch] = useState('');
+  const [woItemsLoading, setWoItemsLoading] = useState(false);
+  const [woBomsLoading, setWoBomsLoading] = useState(false);
 
   useEffect(() => {
     const loadDrawerItems = async () => {
-      const conn = frappe.getConnectionSettings();
-      if (conn.isLive && conn.connected) {
-        const items = await frappe.getFinishedGoods();
-        if (items && items.length > 0) {
-          setWoProductsList(items);
-          setSelectedWoProduct(items[0].code);
-        } else {
-          setWoProductsList(PRODUCTS.map(p => ({ code: p.code, name: p.name })));
-          setSelectedWoProduct(PRODUCTS[0].code);
+      setWoItemsLoading(true);
+      setWoProductsList([]);
+      setWoBomsList([]);
+      setSelectedWoProduct('');
+      setSelectedWoBom('');
+      setWoProductSearch('');
+      setWoBomSearch('');
+
+      const fallbackItems = PRODUCTS.map(p => ({
+        code: p.code,
+        name: p.name,
+        unit: p.unit || 'Nos'
+      }));
+
+      try {
+        const conn = frappe.getConnectionSettings();
+
+        if (conn.isLive && conn.connected) {
+          // Best source for Work Order item dropdown: Items that already have active submitted BOMs.
+          // This avoids showing raw materials or items that cannot create a Work Order.
+          const items = await frappe.getManufacturableItems?.(300) || await frappe.getFinishedGoods(300);
+
+          if (items && items.length > 0) {
+            setWoProductsList(items);
+            setSelectedWoProduct(items[0].code);
+            return;
+          }
         }
-      } else {
-        setWoProductsList(PRODUCTS.map(p => ({ code: p.code, name: p.name })));
-        setSelectedWoProduct(PRODUCTS[0].code);
+
+        setWoProductsList(fallbackItems);
+        setSelectedWoProduct(fallbackItems[0]?.code || '');
+      } catch (err) {
+        console.error('Failed to load Work Order items:', err);
+        setWoProductsList(fallbackItems);
+        setSelectedWoProduct(fallbackItems[0]?.code || '');
+      } finally {
+        setWoItemsLoading(false);
       }
     };
+
     if (showNewWODrawer) {
       loadDrawerItems();
     }
@@ -329,24 +358,50 @@ function App() {
 
   useEffect(() => {
     const loadProductBoms = async () => {
-      if (selectedWoProduct) {
+      setWoBomsList([]);
+      setSelectedWoBom('');
+      setWoBomSearch('');
+
+      if (!selectedWoProduct) return;
+
+      setWoBomsLoading(true);
+
+      try {
         const conn = frappe.getConnectionSettings();
+
         if (conn.isLive && conn.connected) {
-          const boms = await frappe.getBOMsForItem(selectedWoProduct);
+          const boms = await frappe.getBOMsForItem(selectedWoProduct, 100);
           setWoBomsList(boms || []);
-          if (boms && boms.length > 0) {
-            setSelectedWoBom(boms[0].name);
-          } else {
-            setSelectedWoBom('');
-          }
-        } else {
-          setSelectedWoBom(`BOM-${selectedWoProduct}-demo`);
-          setWoBomsList([{ id: `BOM-${selectedWoProduct}-demo`, name: `BOM-${selectedWoProduct}-demo` }]);
+          setSelectedWoBom((boms && boms.length > 0) ? boms[0].name : '');
+          return;
         }
+
+        const demoBom = `BOM-${selectedWoProduct}-demo`;
+        setWoBomsList([{ id: demoBom, name: demoBom, productName: selectedWoProduct, active: 1 }]);
+        setSelectedWoBom(demoBom);
+      } catch (err) {
+        console.error(`Failed to load BOMs for ${selectedWoProduct}:`, err);
+        setWoBomsList([]);
+        setSelectedWoBom('');
+      } finally {
+        setWoBomsLoading(false);
       }
     };
+
     loadProductBoms();
-  }, [selectedWoProduct]);
+  }, [selectedWoProduct, isLoggedIn]);
+
+  const filteredWoProductsList = woProductsList.filter(p => {
+    const q = woProductSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (p.code || '').toLowerCase().includes(q) || (p.name || '').toLowerCase().includes(q);
+  });
+
+  const filteredWoBomsList = woBomsList.filter(bom => {
+    const q = woBomSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (bom.name || '').toLowerCase().includes(q) || (bom.productName || '').toLowerCase().includes(q);
+  });
 
   // Notification states
   const [showNotifications, setShowNotifications] = useState(false);
@@ -356,28 +411,28 @@ function App() {
     const saved = localStorage.getItem('fiji_support_tickets');
     if (saved) return JSON.parse(saved);
     return [
-      { 
-        name: 'TKT-2026-001', 
-        subject: 'MV Kalana delay in custom clearance', 
-        customer: 'Micronesia Shipping Ltd', 
-        status: 'Open', 
-        priority: 'High', 
-        raised_by: 'captain.clark@micronesia.com', 
-        creation: '2026-05-30 08:30:00', 
+      {
+        name: 'TKT-2026-001',
+        subject: 'MV Kalana delay in custom clearance',
+        customer: 'Micronesia Shipping Ltd',
+        status: 'Open',
+        priority: 'High',
+        raised_by: 'captain.clark@micronesia.com',
+        creation: '2026-05-30 08:30:00',
         description: 'Vessel has been anchored at Port Moresby outer harbor waiting for customs clearance on fuel cargo. Need immediate escalation.',
         conversation: [
           { sender: 'customer', name: 'Captain Clark', text: 'Vessel has been anchored at Port Moresby outer harbor waiting for customs clearance on fuel cargo. Need immediate escalation.', timestamp: '2026-05-30 08:30:00' },
           { sender: 'agent', name: 'Operations Desk', text: 'Hello Captain Clark, we have received your request. We are contacting Port Moresby customs liaison officer to expedite.', timestamp: '2026-05-30 08:45:00' }
         ]
       },
-      { 
-        name: 'TKT-2026-002', 
-        subject: 'Inconsistent billing on invoice SINV-26-004', 
-        customer: 'Solomon Logistics Ltd', 
-        status: 'In Progress', 
-        priority: 'Medium', 
-        raised_by: 'billing@solomonlog.com', 
-        creation: '2026-05-29 14:15:00', 
+      {
+        name: 'TKT-2026-002',
+        subject: 'Inconsistent billing on invoice SINV-26-004',
+        customer: 'Solomon Logistics Ltd',
+        status: 'In Process',
+        priority: 'Medium',
+        raised_by: 'billing@solomonlog.com',
+        creation: '2026-05-29 14:15:00',
         description: 'The outstanding amount on invoice SINV-26-004 does not match the agreed contract rates for freight services. Please review.',
         conversation: [
           { sender: 'customer', name: 'Solomon Billing Dept', text: 'The outstanding amount on invoice SINV-26-004 does not match the agreed contract rates for freight services. Please review.', timestamp: '2026-05-29 14:15:00' },
@@ -407,10 +462,10 @@ function App() {
   const handleResolveTicket = (name) => {
     setTickets(prev => prev.map(t => {
       if (t.name === name) {
-        return { 
-          ...t, 
+        return {
+          ...t,
           status: 'Resolved',
-          conversation: [...(t.conversation || []), { sender: 'system', name: 'System', text: 'Ticket resolved by support desk', timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19) }] 
+          conversation: [...(t.conversation || []), { sender: 'system', name: 'System', text: 'Ticket resolved by support desk', timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19) }]
         };
       }
       return t;
@@ -420,10 +475,10 @@ function App() {
   const handleUpdateTicketStatus = (name, newStatus) => {
     setTickets(prev => prev.map(t => {
       if (t.name === name) {
-        return { 
-          ...t, 
+        return {
+          ...t,
           status: newStatus,
-          conversation: [...(t.conversation || []), { sender: 'system', name: 'System', text: `Ticket status updated to ${newStatus}`, timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19) }] 
+          conversation: [...(t.conversation || []), { sender: 'system', name: 'System', text: `Ticket status updated to ${newStatus}`, timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19) }]
         };
       }
       return t;
@@ -433,9 +488,9 @@ function App() {
   const handleSendTicketMessage = (name, text, senderType, senderName) => {
     setTickets(prev => prev.map(t => {
       if (t.name === name) {
-        return { 
-          ...t, 
-          conversation: [...(t.conversation || []), { sender: senderType, name: senderName, text, timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19) }] 
+        return {
+          ...t,
+          conversation: [...(t.conversation || []), { sender: senderType, name: senderName, text, timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19) }]
         };
       }
       return t;
@@ -531,7 +586,7 @@ function App() {
       if (intervalId) clearInterval(intervalId);
     };
   }, [simPlaying, simSpeed]);
-  
+
   // Settings Panel states
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settingsUrl, setSettingsUrl] = useState('');
@@ -544,7 +599,7 @@ function App() {
   const [operatorName, setOperatorName] = useState('');
   const [operatorRemarks, setOperatorRemarks] = useState('');
   const [activeTimelineJC, setActiveTimelineJC] = useState(null); // { woId, jcId, operation, remarksList }
-  
+
   // Job Card actual start/end time states
   const [jcActualStartTime, setJcActualStartTime] = useState('');
   const [jcActualEndTime, setJcActualEndTime] = useState('');
@@ -583,7 +638,7 @@ function App() {
 
   const [replyingToIdx, setReplyingToIdx] = useState(null);
   const [replyText, setReplyText] = useState('');
-  
+
   const [employeeList, setEmployeeList] = useState([]);
   const [showEmployeeDropdown, setShowEmployeeDropdown] = useState(false);
   const [activeSearchField, setActiveSearchField] = useState(null); // 'pauseModal' | 'remarksModal' | 'maintOperator' | 'maintSupervisor'
@@ -592,10 +647,10 @@ function App() {
     if (field === 'maintOperator') setMaintOperator(query);
     else if (field === 'maintSupervisor') setMaintSupervisor(query);
     else if (
-      field === 'safetyOperator' || 
-      field === 'safetySupervisor' || 
-      field === 'safetyInjured' || 
-      field === 'firstAidEmployee' || 
+      field === 'safetyOperator' ||
+      field === 'safetySupervisor' ||
+      field === 'safetyInjured' ||
+      field === 'firstAidEmployee' ||
       field === 'firstAidSupervisor' ||
       field === 'labAnalyst' ||
       field === 'labVerifiedBy' ||
@@ -810,7 +865,7 @@ function App() {
     e.preventDefault();
     setMaintSaving(true);
     const template = MAINTENANCE_TEMPLATES[activeMaintTemplate];
-    
+
     let totalChecked = 0;
     template.tasks.forEach((task, tIdx) => {
       if (maintCheckgrid[tIdx]) {
@@ -866,7 +921,7 @@ function App() {
       setMaintOperator('');
       setMaintSupervisor('');
       setMaintOverallComments('');
-      
+
       showAlert(`Maintenance checklist for ${template.equipment} logged successfully!`, 'success', 'Maintenance Log Saved');
     } finally {
       setMaintSaving(false);
@@ -889,7 +944,7 @@ function App() {
     setActiveMaintForm(null);
     showAlert(`${newRecord.name} logged successfully!`, 'success', 'Log Saved');
   };
-  
+
   // Stock Adjust Modal states
   const [showAdjustStockModal, setShowAdjustStockModal] = useState(false);
   const [adjustItemCode, setAdjustItemCode] = useState('');
@@ -958,19 +1013,19 @@ function App() {
           if (liveItems && liveItems.length > 0) {
             const itemCodes = liveItems.map(item => item.code);
             const bins = await frappe.getBinQuantities(itemCodes);
-            
+
             const merged = liveItems.map(item => {
               const targetWarehouse = item.category === 'Finished Goods' ? 'Finished Goods - CWFL' : 'Raw Materials - CWFL';
               const binMatch = bins.find(b => b.item_code === item.code && b.warehouse === targetWarehouse);
               const actualQty = binMatch ? Number(binMatch.actual_qty || 0) : null;
-              
+
               const localMatch = inventory[item.code];
               return {
                 ...item,
                 qty: actualQty !== null ? actualQty : (localMatch ? localMatch.qty : Math.floor(Math.random() * 500) + 100)
               };
             });
-            
+
             setErpItems(merged);
             if (!selectedItemCode || !merged.find(i => i.code === selectedItemCode)) {
               setSelectedItemCode(merged[0].code);
@@ -999,42 +1054,123 @@ function App() {
 
 
 
+  // const loadWorkOrders = async () => {
+  //   Promise.resolve().then(() => setWoLoading(true));
+  //   const conn = frappe.getConnectionSettings();
+  //   if (conn.isLive && conn.connected) {
+  //     try {
+  //       const offset = (currentPage - 1) * recordsPerPage;
+  //       const liveWOs = await frappe.getWorkOrders(recordsPerPage, offset);
+  //       if (liveWOs) {
+  //         const savedLocal = localStorage.getItem('fiji_work_orders');
+  //         const localList = savedLocal ? JSON.parse(savedLocal) : INITIAL_WORK_ORDERS;
+  //         const merged = await Promise.all(liveWOs.map(async (live) => {
+  //           const localMatch = localList.find(l => l.id === live.id);
+  //           let realJobCards = null;
+  //           try {
+  //             realJobCards = await frappe.getJobCardsForWorkOrder(live.id);
+  //           } catch (jcErr) {
+  //             console.warn(`Failed to fetch Job Cards for Work Order ${live.id}:`, jcErr);
+  //           }
+
+  //           return {
+  //             ...live,
+  //             jobCards: (realJobCards && realJobCards.length > 0) ? realJobCards : (localMatch && localMatch.jobCards.length > 0 ? localMatch.jobCards : [
+  //               { id: 'PO-JOB00601', operation: 'Mixing', station: 'Mixing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //               { id: 'PO-JOB00602', operation: 'Lab Testing', station: 'Lab Testing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //               { id: 'PO-JOB00603', operation: 'Can/Bottle Prep', station: 'Can Preparation Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //               { id: 'PO-JOB00604', operation: 'Filling', station: 'Filling Machine', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //               { id: 'PO-JOB00605', operation: 'Initial Quality Check', station: 'Initial QC Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //               { id: 'PO-JOB00606', operation: 'Warmer', station: 'Warmer Machine', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //               { id: 'PO-JOB00607', operation: 'Laser Labeling', station: 'Labeling Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //               { id: 'PO-JOB00608', operation: 'Final Quality Check', station: 'Final QC Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //               { id: 'PO-JOB00609', operation: 'Hand Packing', station: 'Packing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //               { id: 'PO-JOB00610', operation: 'Palletising', station: 'Palletisation Area', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //               { id: 'PO-JOB00611', operation: 'Store & Dispatch', station: 'Warehouse/Logistics', status: 'Not Started', operator: '', remarks: '', remarksList: [] }
+  //             ])
+  //           };
+  //         }));
+  //         setWorkOrders(merged);
+  //       }
+  //     } catch (err) {
+  //       console.error("Failed to load work orders from ERPNext:", err);
+  //     } finally {
+  //       setWoLoading(false);
+  //     }
+  //   } else {
+  //     setWoLoading(false);
+  //   }
+  // };
   const loadWorkOrders = async () => {
     Promise.resolve().then(() => setWoLoading(true));
+
     const conn = frappe.getConnectionSettings();
+
     if (conn.isLive && conn.connected) {
       try {
         const offset = (currentPage - 1) * recordsPerPage;
         const liveWOs = await frappe.getWorkOrders(recordsPerPage, offset);
+
         if (liveWOs) {
           const savedLocal = localStorage.getItem('fiji_work_orders');
           const localList = savedLocal ? JSON.parse(savedLocal) : INITIAL_WORK_ORDERS;
-          const merged = await Promise.all(liveWOs.map(async (live) => {
-            const localMatch = localList.find(l => l.id === live.id);
-            let realJobCards = null;
-            try {
-              realJobCards = await frappe.getJobCardsForWorkOrder(live.id);
-            } catch (jcErr) {
-              console.warn(`Failed to fetch Job Cards for Work Order ${live.id}:`, jcErr);
-            }
 
-            return {
-              ...live,
-              jobCards: (realJobCards && realJobCards.length > 0) ? realJobCards : (localMatch && localMatch.jobCards.length > 0 ? localMatch.jobCards : [
-                { id: 'PO-JOB00601', operation: 'Mixing', station: 'Mixing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-                { id: 'PO-JOB00602', operation: 'Lab Testing', station: 'Lab Testing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-                { id: 'PO-JOB00603', operation: 'Can/Bottle Prep', station: 'Can Preparation Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-                { id: 'PO-JOB00604', operation: 'Filling', station: 'Filling Machine', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-                { id: 'PO-JOB00605', operation: 'Initial Quality Check', station: 'Initial QC Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-                { id: 'PO-JOB00606', operation: 'Warmer', station: 'Warmer Machine', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-                { id: 'PO-JOB00607', operation: 'Laser Labeling', station: 'Labeling Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-                { id: 'PO-JOB00608', operation: 'Final Quality Check', station: 'Final QC Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-                { id: 'PO-JOB00609', operation: 'Hand Packing', station: 'Packing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-                { id: 'PO-JOB00610', operation: 'Palletising', station: 'Palletisation Area', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-                { id: 'PO-JOB00611', operation: 'Store & Dispatch', station: 'Warehouse/Logistics', status: 'Not Started', operator: '', remarks: '', remarksList: [] }
-              ])
-            };
-          }));
+          const defaultJobCards = [
+            { id: 'PO-JOB00601', operation: 'Mixing', station: 'Mixing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+            { id: 'PO-JOB00602', operation: 'Lab Testing', station: 'Lab Testing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+            { id: 'PO-JOB00603', operation: 'Can/Bottle Prep', station: 'Can Preparation Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+            { id: 'PO-JOB00604', operation: 'Filling', station: 'Filling Machine', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+            { id: 'PO-JOB00605', operation: 'Initial Quality Check', station: 'Initial QC Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+            { id: 'PO-JOB00606', operation: 'Warmer', station: 'Warmer Machine', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+            { id: 'PO-JOB00607', operation: 'Laser Labeling', station: 'Labeling Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+            { id: 'PO-JOB00608', operation: 'Final Quality Check', station: 'Final QC Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+            { id: 'PO-JOB00609', operation: 'Hand Packing', station: 'Packing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+            { id: 'PO-JOB00610', operation: 'Palletising', station: 'Palletisation Area', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+            { id: 'PO-JOB00611', operation: 'Store & Dispatch', station: 'Warehouse/Logistics', status: 'Not Started', operator: '', remarks: '', remarksList: [] }
+          ];
+
+          const merged = await Promise.all(
+            liveWOs.map(async (live) => {
+              const localMatch = localList.find(l => l.id === live.id);
+
+              let realJobCards = null;
+
+              try {
+                realJobCards = await frappe.getJobCardsForWorkOrder(live.id);
+              } catch (jcErr) {
+                console.warn(`Failed to fetch Job Cards for Work Order ${live.id}:`, jcErr);
+              }
+
+              const mergedJobCards =
+                realJobCards && realJobCards.length > 0
+                  ? realJobCards
+                  : localMatch && localMatch.jobCards && localMatch.jobCards.length > 0
+                    ? localMatch.jobCards
+                    : defaultJobCards;
+
+              const materialTransferred = Boolean(
+                localMatch?.materialTransferred ||
+                localMatch?.stockEntryCreated
+              );
+
+              return {
+                ...live,
+
+                // Preserve local material issue flags
+                materialTransferred,
+                stockEntryCreated: Boolean(localMatch?.stockEntryCreated),
+                stockEntryName: localMatch?.stockEntryName || '',
+                stockEntryPostingDate: localMatch?.stockEntryPostingDate || '',
+                stockEntryPostingTime: localMatch?.stockEntryPostingTime || '',
+
+                // Trust ERPNext status after Stock Entry submission
+                status: live.status,
+
+                jobCards: mergedJobCards
+              };
+            })
+          );
+
           setWorkOrders(merged);
         }
       } catch (err) {
@@ -1116,7 +1252,7 @@ function App() {
           }
           return [];
         });
-        
+
         const results = await Promise.all(fetchPromises);
         const merged = results.flat().sort((a, b) => b.timestamp.localeCompare(a.timestamp));
         if (merged.length > 0) {
@@ -1146,14 +1282,23 @@ function App() {
 
 
 
+  // ERPNext status helpers
+  // Work Order uses ERPNext statuses: Not Started / In Process / Stock Reserved / Completed...
+  // Job Card uses ERPNext statuses: Open / Work In Progress / On Hold / Completed...
+  const WORK_ORDER_ACTIVE_STATUSES = ['In Process', 'Stock Reserved', 'Stock Partially Reserved'];
+  const WORK_ORDER_STARTABLE_STATUSES = ['Pending', 'Not Started', 'Draft', 'Submitted'];
+  const JOB_CARD_STARTABLE_STATUSES = ['Open', 'Not Started', 'Material Transferred', 'Submitted'];
+  const JOB_CARD_RUNNING_STATUSES = ['Work In Progress', 'In Process'];
+  const JOB_CARD_PAUSED_STATUSES = ['On Hold', 'Paused'];
+
   // Dashboard calculations
-  const activeWOsCount = workOrders.filter(wo => wo.status === 'In Progress').length;
+  const activeWOsCount = workOrders.filter(wo => WORK_ORDER_ACTIVE_STATUSES.includes(wo.status)).length;
   const pendingWOsCount = workOrders.filter(wo => wo.status === 'Pending').length;
-  
+
   let inProgressJobCardsCount = 0;
   workOrders.forEach(wo => {
     if (wo.jobCards) {
-      inProgressJobCardsCount += wo.jobCards.filter(jc => jc.status === 'In Progress').length;
+      inProgressJobCardsCount += wo.jobCards.filter(jc => JOB_CARD_RUNNING_STATUSES.includes(jc.status)).length;
     }
   });
 
@@ -1165,7 +1310,7 @@ function App() {
   const totalProduction = workOrders.reduce((sum, wo) => sum + (wo.produced || 0), 0);
   const goodProduction = workOrders.reduce((sum, wo) => {
     if (wo.status === 'Completed') return sum + (wo.produced || 0);
-    if (wo.status === 'In Progress') return sum + (wo.produced || 0) * 0.96;
+    if (WORK_ORDER_ACTIVE_STATUSES.includes(wo.status)) return sum + (wo.produced || 0) * 0.96;
     return sum;
   }, 0);
   const looseProduction = totalProduction - goodProduction;
@@ -1310,6 +1455,48 @@ function App() {
     const woToStart = workOrders.find(wo => wo.id === woId);
     if (!woToStart) return;
 
+    // First check ERPNext for an existing Draft Stock Entry.
+    // If found, reopen the same draft so the user can edit qty/warehouses and submit it.
+    if (conn.isLive && conn.connected) {
+      setSyncStatusMsg('Checking existing Stock Entry draft...');
+      try {
+        const existingDraft = await frappe.getStockEntryForWorkOrder(woToStart.id);
+
+        if (existingDraft) {
+          const draftItems = (existingDraft.items || []).map(row => ({
+            code: row.item_code,
+            name: row.item_name || row.item_code,
+            qty: Number(row.qty || row.transfer_qty || 0),
+            unit: row.uom || row.stock_uom || '',
+            sourceWarehouse: row.s_warehouse || '',
+            targetWarehouse: row.t_warehouse || ''
+          }));
+
+          setSeSourceSearch({});
+          setSeTargetSearch({});
+
+          setStockEntryModal({
+            woId: woToStart.id,
+            company: existingDraft.company || woToStart.company || 'Anantdv (Demo)',
+            postingDate: existingDraft.posting_date || '',
+            postingTime: existingDraft.posting_time ? String(existingDraft.posting_time).substring(0, 5) : '',
+            items: draftItems,
+            stockEntryName: existingDraft.name,
+            docstatus: existingDraft.docstatus || 0,
+            saved: true,
+            submitted: false
+          });
+
+          setSyncStatusMsg('');
+          return;
+        }
+      } catch (err) {
+        console.warn(`No editable Stock Entry draft found for Work Order ${woToStart.id}:`, err);
+      } finally {
+        setSyncStatusMsg('');
+      }
+    }
+
     let materials = [];
     if (conn.isLive && conn.connected) {
       setSyncStatusMsg('Loading BOM materials for Stock Entry...');
@@ -1354,97 +1541,266 @@ function App() {
       company: woToStart.company || 'Anantdv (Demo)',
       postingDate: formattedDate,
       postingTime: formattedTime,
-      items: materials
+      items: materials,
+
+      // Draft/submission state for the two-step ERPNext flow
+      stockEntryName: '',
+      docstatus: 0,
+      saved: false,
+      submitted: false
     });
   };
 
+  // const handleConfirmStockEntry = async (seData) => {
+  //   setSeSaving(true);
+  //   try {
+  //     let success = true;
+  //     let errorMsg = '';
+  //     const conn = frappe.getConnectionSettings();
+
+  //     if (conn.isLive && conn.connected) {
+  //       try {
+  //         setSyncStatusMsg('Creating Stock Entry on ERPNext...');
+  //         const convertedDate = seData.postingDate;
+  //         const seRes = await frappe.createStockEntry({
+  //           workOrder: seData.woId,
+  //           company: seData.company,
+  //           postingDate: convertedDate,
+  //           postingTime: seData.postingTime,
+  //           items: seData.items
+  //         });
+  //         if (!seRes || !seRes.success) {
+  //           success = false;
+  //           errorMsg = seRes?.message || 'Stock Entry submission failed';
+  //         }
+  //       } catch (err) {
+  //         success = false;
+  //         errorMsg = err.message;
+  //       }
+  //     }
+
+  //     if (!success) {
+  //       showAlert(`Failed to create Stock Entry: ${errorMsg}`, 'error', 'ERPNext Error');
+  //       return;
+  //     }
+
+  //     // Stock Entry success - now start the Work Order run
+  //     const woToStart = workOrders.find(wo => wo.id === seData.woId);
+  //     if (!woToStart) {
+  //       setStockEntryModal(null);
+  //       return;
+  //     }
+
+  //     const updatedJobCards = woToStart.jobCards && woToStart.jobCards.length > 0 ? woToStart.jobCards : [
+  //       { id: 'PO-JOB00601', operation: 'Mixing', station: 'Mixing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //       { id: 'PO-JOB00602', operation: 'Lab Testing', station: 'Lab Testing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //       { id: 'PO-JOB00603', operation: 'Can/Bottle Prep', station: 'Can Preparation Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //       { id: 'PO-JOB00604', operation: 'Filling', station: 'Filling Machine', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //       { id: 'PO-JOB00605', operation: 'Initial Quality Check', station: 'Initial QC Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //       { id: 'PO-JOB00606', operation: 'Warmer', station: 'Warmer Machine', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //       { id: 'PO-JOB00607', operation: 'Laser Labeling', station: 'Labeling Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //       { id: 'PO-JOB00608', operation: 'Final Quality Check', station: 'Final QC Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //       { id: 'PO-JOB00609', operation: 'Hand Packing', station: 'Packing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //       { id: 'PO-JOB00610', operation: 'Palletising', station: 'Palletisation Area', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //       { id: 'PO-JOB00611', operation: 'Store & Dispatch', station: 'Warehouse/Logistics', status: 'Not Started', operator: '', remarks: '', remarksList: [] }
+  //     ];
+
+  //     const updatedWO = {
+  //       ...woToStart,
+  //       status: 'In Process',
+  //       jobCards: updatedJobCards
+  //     };
+
+  //     if (conn.isLive && conn.connected) {
+  //       try {
+  //         setSyncStatusMsg('Starting Work Order on ERPNext...');
+  //         const res = await frappe.syncWorkOrderToERP(updatedWO);
+  //         if (!res || !res.success) {
+  //           success = false;
+  //           errorMsg = res?.message || 'Sync failed';
+  //         }
+  //       } catch (err) {
+  //         success = false;
+  //         errorMsg = err.message;
+  //       }
+  //     }
+
+  //     if (success) {
+  //       setWorkOrders(prev => prev.map(wo => wo.id === seData.woId ? updatedWO : wo));
+  //       showAlert(`Stock Entry submitted and Work Order ${seData.woId} started successfully!`, 'success', 'Work Order Started');
+  //       setStockEntryModal(null);
+  //     } else {
+  //       showAlert(`Failed to start Work Order: ${errorMsg}`, 'error', 'ERPNext Error');
+  //     }
+  //   } finally {
+  //     setSeSaving(false);
+  //   }
+  // };
   const handleConfirmStockEntry = async (seData) => {
     setSeSaving(true);
+
     try {
-      let success = true;
-      let errorMsg = '';
       const conn = frappe.getConnectionSettings();
 
-      if (conn.isLive && conn.connected) {
-        try {
-          setSyncStatusMsg('Creating Stock Entry on ERPNext...');
-          const convertedDate = seData.postingDate;
-          const seRes = await frappe.createStockEntry({
-            workOrder: seData.woId,
-            company: seData.company,
-            postingDate: convertedDate,
-            postingTime: seData.postingTime,
-            items: seData.items
-          });
-          if (!seRes || !seRes.success) {
-            success = false;
-            errorMsg = seRes?.message || 'Stock Entry submission failed';
-          }
-        } catch (err) {
-          success = false;
-          errorMsg = err.message;
-        }
-      }
+      if (!conn.isLive || !conn.connected) {
+        const demoStockEntryName = `DEMO-SE-${Date.now().toString().slice(-6)}`;
 
-      if (!success) {
-        showAlert(`Failed to create Stock Entry: ${errorMsg}`, 'error', 'ERPNext Error');
+        setStockEntryModal(prev => ({
+          ...prev,
+          stockEntryName: demoStockEntryName,
+          docstatus: 0,
+          saved: true,
+          submitted: false
+        }));
+
+        setWorkOrders(prev =>
+          prev.map(wo =>
+            wo.id === seData.woId
+              ? {
+                  ...wo,
+                  stockEntryCreated: true,
+                  stockEntryName: demoStockEntryName,
+                  stockEntryPostingDate: seData.postingDate,
+                  stockEntryPostingTime: seData.postingTime
+                }
+              : wo
+          )
+        );
+
+        showAlert(
+          `Stock Entry ${demoStockEntryName} saved as Draft in demo mode. Now submit it to continue the flow.`,
+          'success',
+          'Stock Entry Draft Saved'
+        );
+
         return;
       }
 
-      // Stock Entry success - now start the Work Order run
-      const woToStart = workOrders.find(wo => wo.id === seData.woId);
-      if (!woToStart) {
-        setStockEntryModal(null);
+      setSyncStatusMsg('Saving Stock Entry draft on ERPNext...');
+
+      const seRes = await frappe.saveStockEntryDraft({
+        workOrder: seData.woId,
+        company: seData.company,
+        postingDate: seData.postingDate,
+        postingTime: seData.postingTime,
+        stockEntryName: seData.stockEntryName || '',
+        items: seData.items
+      });
+
+      if (!seRes || !seRes.success) {
+        showAlert(
+          `Failed to save Stock Entry draft: ${seRes?.message || 'Unknown error'}`,
+          'error',
+          'ERPNext Error'
+        );
         return;
       }
 
-      const updatedJobCards = woToStart.jobCards && woToStart.jobCards.length > 0 ? woToStart.jobCards : [
-        { id: 'PO-JOB00601', operation: 'Mixing', station: 'Mixing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-        { id: 'PO-JOB00602', operation: 'Lab Testing', station: 'Lab Testing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-        { id: 'PO-JOB00603', operation: 'Can/Bottle Prep', station: 'Can Preparation Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-        { id: 'PO-JOB00604', operation: 'Filling', station: 'Filling Machine', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-        { id: 'PO-JOB00605', operation: 'Initial Quality Check', station: 'Initial QC Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-        { id: 'PO-JOB00606', operation: 'Warmer', station: 'Warmer Machine', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-        { id: 'PO-JOB00607', operation: 'Laser Labeling', station: 'Labeling Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-        { id: 'PO-JOB00608', operation: 'Final Quality Check', station: 'Final QC Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-        { id: 'PO-JOB00609', operation: 'Hand Packing', station: 'Packing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-        { id: 'PO-JOB00610', operation: 'Palletising', station: 'Palletisation Area', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-        { id: 'PO-JOB00611', operation: 'Store & Dispatch', station: 'Warehouse/Logistics', status: 'Not Started', operator: '', remarks: '', remarksList: [] }
-      ];
+      const stockEntryName = seRes.name;
 
-      const updatedWO = {
-        ...woToStart,
-        status: 'In Progress',
-        jobCards: updatedJobCards
-      };
+      setStockEntryModal(prev => ({
+        ...prev,
+        stockEntryName,
+        docstatus: 0,
+        saved: true,
+        submitted: false
+      }));
 
-      if (conn.isLive && conn.connected) {
-        try {
-          setSyncStatusMsg('Starting Work Order on ERPNext...');
-          const res = await frappe.syncWorkOrderToERP(updatedWO);
-          if (!res || !res.success) {
-            success = false;
-            errorMsg = res?.message || 'Sync failed';
-          }
-        } catch (err) {
-          success = false;
-          errorMsg = err.message;
-        }
-      }
+      setWorkOrders(prev =>
+        prev.map(wo =>
+          wo.id === seData.woId
+            ? {
+                ...wo,
+                stockEntryCreated: true,
+                stockEntryName,
+                stockEntryPostingDate: seData.postingDate,
+                stockEntryPostingTime: seData.postingTime
+              }
+            : wo
+        )
+      );
 
-      if (success) {
-        setWorkOrders(prev => prev.map(wo => wo.id === seData.woId ? updatedWO : wo));
-        showAlert(`Stock Entry submitted and Work Order ${seData.woId} started successfully!`, 'success', 'Work Order Started');
-        setStockEntryModal(null);
-      } else {
-        showAlert(`Failed to start Work Order: ${errorMsg}`, 'error', 'ERPNext Error');
-      }
+      showAlert(
+        `Stock Entry ${stockEntryName} saved as Draft. Now submit it to start the Work Order in ERPNext.`,
+        'success',
+        'Stock Entry Draft Saved'
+      );
+    } catch (err) {
+      showAlert(`Failed to save Stock Entry draft: ${err.message}`, 'error', 'ERPNext Error');
     } finally {
       setSeSaving(false);
+      setSyncStatusMsg('');
     }
   };
 
-  const handleSearchSeSource = async (idx, query) => {
+  const handleSubmitStockEntry = async () => {
+    if (!stockEntryModal?.stockEntryName) {
+      showAlert('Please save the Stock Entry first.', 'warning', 'Stock Entry Not Saved');
+      return;
+    }
+
+    setSeSaving(true);
+
+    try {
+      const conn = frappe.getConnectionSettings();
+      const woId = stockEntryModal.woId;
+
+      if (!conn.isLive || !conn.connected) {
+        setWorkOrders(prev =>
+          prev.map(wo =>
+            wo.id === woId
+              ? {
+                  ...wo,
+                  status: 'In Process',
+                  materialTransferred: true,
+                  stockEntryCreated: true,
+                  submitted: true
+                }
+              : wo
+          )
+        );
+
+        showAlert('Demo Stock Entry submitted locally. Work Order moved to In Process.', 'success', 'Submitted');
+        setStockEntryModal(null);
+        return;
+      }
+
+      setSyncStatusMsg('Submitting Stock Entry on ERPNext...');
+
+      const submitRes = await frappe.submitStockEntry(stockEntryModal.stockEntryName);
+
+      if (!submitRes || !submitRes.success) {
+        showAlert(
+          `Failed to submit Stock Entry: ${submitRes?.message || 'Unknown error'}`,
+          'error',
+          'ERPNext Error'
+        );
+        return;
+      }
+
+      showAlert(
+        `Stock Entry ${stockEntryModal.stockEntryName} submitted. ERPNext will update the Work Order status.`,
+        'success',
+        'Stock Entry Submitted'
+      );
+
+      setStockEntryModal(null);
+      setSelectedWOId(woId);
+
+      // ERPNext updates Work Order status and creates/updates Job Cards after submit.
+      // Reload after a tiny delay so server-side hooks/status updates are visible.
+      setTimeout(() => {
+        loadWorkOrders();
+      }, 700);
+    } catch (err) {
+      showAlert(`Failed to submit Stock Entry: ${err.message}`, 'error', 'ERPNext Error');
+    } finally {
+      setSeSaving(false);
+      setSyncStatusMsg('');
+    }
+  };
+
+const handleSearchSeSource = async (idx, query) => {
     setSeSourceSearch(prev => ({ ...prev, [idx]: query }));
     setActiveSeSourceRow(idx);
     const res = await frappe.getWarehouses(query);
@@ -1491,7 +1847,7 @@ function App() {
           updatedInv[mat.code].qty = Math.max(0, updatedInv[mat.code].qty - totalNeeded);
           frappe.syncStockToERP(mat.code, updatedInv[mat.code].qty);
         }
-        
+
         if (stepType === 'Can/Bottle Prep' && updatedInv[mat.code] && updatedInv[mat.code].category === 'Packaging') {
           updatedInv[mat.code].qty = Math.max(0, updatedInv[mat.code].qty - totalNeeded);
           frappe.syncStockToERP(mat.code, updatedInv[mat.code].qty);
@@ -1537,21 +1893,23 @@ function App() {
   };
 
   // Job Card State modifiers (Start, Pause, Resume, Finish, Add Remarks)
-  const handleStartJobCard = (woId, jcId) => {
+  const handleStartJobCard = async (woId, jcId) => {
     const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
     const log = { timestamp, operator: currentUser, text: 'Job started.' };
 
     let finalRemarks = '';
+
+    // Optimistic UI update
     setWorkOrders(prevWOs => prevWOs.map(wo => {
       if (wo.id !== woId) return wo;
-      
+
       const updatedJobCards = wo.jobCards.map(jc => {
         if (jc.id === jcId) {
           const updatedRemarksList = [...(jc.remarksList || []), log];
           finalRemarks = formatRemarksList(updatedRemarksList);
           return {
             ...jc,
-            status: 'In Progress',
+            status: 'Work In Progress',
             operator: currentUser,
             remarksList: updatedRemarksList,
             remarks: finalRemarks
@@ -1560,19 +1918,42 @@ function App() {
         return jc;
       });
 
-      return { ...wo, jobCards: updatedJobCards };
+      return {
+        ...wo,
+        status: 'In Process',
+        jobCards: updatedJobCards
+      };
     }));
 
-    frappe.syncJobCardToERP(jcId, 'In Progress', finalRemarks);
+    try {
+      const conn = frappe.getConnectionSettings();
+
+      if (conn.isLive && conn.connected) {
+        const jcRes = await frappe.syncJobCardToERP(jcId, 'Work In Progress', finalRemarks);
+
+        if (!jcRes || jcRes.success === false) {
+          throw new Error(jcRes?.error || 'Failed to start Job Card in ERPNext');
+        }
+
+        // Make ERPNext Work Order list match the shop-floor status.
+        await frappe.forceWorkOrderInProgress(woId);
+
+        // Reload from ERPNext so frontend does not show fake local-only status.
+        await loadWorkOrders();
+      }
+    } catch (err) {
+      showAlert(`Failed to start Job Card: ${err.message}`, 'error', 'ERPNext Error');
+      loadWorkOrders();
+    }
   };
 
   const handlePauseJobCard = (woId, jcId, operator, remarksText) => {
     const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
     const cleanOp = operator || currentUser;
     const cleanRemarks = remarksText || 'Operation paused.';
-    const log = { 
-      timestamp, 
-      operator: cleanOp, 
+    const log = {
+      timestamp,
+      operator: cleanOp,
       text: `Paused: ${cleanRemarks}`,
       actualStartTime: jcActualStartTime,
       actualEndTime: jcActualEndTime
@@ -1581,14 +1962,14 @@ function App() {
     let finalRemarks = '';
     setWorkOrders(prevWOs => prevWOs.map(wo => {
       if (wo.id !== woId) return wo;
-      
+
       const updatedJobCards = wo.jobCards.map(jc => {
         if (jc.id === jcId) {
           const updatedRemarksList = [...(jc.remarksList || []), log];
           finalRemarks = formatRemarksList(updatedRemarksList);
           return {
             ...jc,
-            status: 'Paused',
+            status: 'On Hold',
             operator: cleanOp,
             remarksList: updatedRemarksList,
             remarks: finalRemarks,
@@ -1602,7 +1983,7 @@ function App() {
       return { ...wo, jobCards: updatedJobCards };
     }));
 
-    frappe.syncJobCardToERP(jcId, 'Paused', finalRemarks);
+    frappe.syncJobCardToERP(jcId, 'On Hold', finalRemarks);
     setActiveJCOp(null);
     setOperatorName('');
     setOperatorRemarks('');
@@ -1617,14 +1998,14 @@ function App() {
     let finalRemarks = '';
     setWorkOrders(prevWOs => prevWOs.map(wo => {
       if (wo.id !== woId) return wo;
-      
+
       const updatedJobCards = wo.jobCards.map(jc => {
         if (jc.id === jcId) {
           const updatedRemarksList = [...(jc.remarksList || []), log];
           finalRemarks = formatRemarksList(updatedRemarksList);
           return {
             ...jc,
-            status: 'In Progress',
+            status: 'Work In Progress',
             operator: currentUser,
             remarksList: updatedRemarksList,
             remarks: finalRemarks
@@ -1636,16 +2017,16 @@ function App() {
       return { ...wo, jobCards: updatedJobCards };
     }));
 
-    frappe.syncJobCardToERP(jcId, 'In Progress', finalRemarks);
+    frappe.syncJobCardToERP(jcId, 'Work In Progress', finalRemarks);
   };
 
   const handleFinishJobCard = (woId, jcId, operator, remarksText) => {
     const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
     const cleanOp = operator || currentUser;
     const cleanRemarks = remarksText || 'Operation finished.';
-    const log = { 
-      timestamp, 
-      operator: cleanOp, 
+    const log = {
+      timestamp,
+      operator: cleanOp,
       text: `Finished: ${cleanRemarks}`,
       actualStartTime: jcActualStartTime,
       actualEndTime: jcActualEndTime
@@ -1675,9 +2056,9 @@ function App() {
 
         const completedCount = updatedCards.filter(jc => jc.status === 'Completed').length;
         const isLastCard = completedCount === updatedCards.length;
-        
+
         const completedJC = wo.jobCards.find(jc => jc.id === jcId);
-        
+
         if (completedJC && completedJC.operation === 'Mixing') {
           deductBOMResources(wo.bomNo, wo.quantity, 'Mixing');
         }
@@ -1686,7 +2067,7 @@ function App() {
           deductBOMResources(wo.bomNo, wo.quantity, 'Can/Bottle Prep');
         }
 
-        const finalStatus = isLastCard ? 'Completed' : 'In Progress';
+        const finalStatus = isLastCard ? 'Completed' : 'In Process';
         const producedCount = isLastCard ? wo.quantity : wo.produced;
 
         if (isLastCard) {
@@ -1717,9 +2098,9 @@ function App() {
     const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
     const cleanOp = operator || currentUser;
     const cleanRemarks = remarksText || 'Comment added.';
-    const log = { 
-      timestamp, 
-      operator: cleanOp, 
+    const log = {
+      timestamp,
+      operator: cleanOp,
       text: cleanRemarks,
       actualStartTime: jcActualStartTime,
       actualEndTime: jcActualEndTime
@@ -1728,7 +2109,7 @@ function App() {
     let finalRemarks = '';
     setWorkOrders(prevWOs => prevWOs.map(wo => {
       if (wo.id !== woId) return wo;
-      
+
       const updatedJobCards = wo.jobCards.map(jc => {
         if (jc.id === jcId) {
           const updatedRemarksList = [...(jc.remarksList || []), log];
@@ -1749,7 +2130,7 @@ function App() {
 
     const targetWO = workOrders.find(wo => wo.id === woId);
     const targetJC = targetWO?.jobCards?.find(j => j.id === jcId);
-    const currentStatus = targetJC ? targetJC.status : 'In Progress';
+    const currentStatus = targetJC ? targetJC.status : 'Work In Progress';
     frappe.syncJobCardToERP(jcId, currentStatus, finalRemarks);
 
     setActiveJCOp(null);
@@ -1770,7 +2151,7 @@ function App() {
     let finalRemarks = '';
     setWorkOrders(prevWOs => prevWOs.map(wo => {
       if (wo.id !== woId) return wo;
-      
+
       const updatedJobCards = wo.jobCards.map(jc => {
         if (jc.id === jcId) {
           const updatedRemarksList = (jc.remarksList || []).map((log, idx) => {
@@ -1799,7 +2180,7 @@ function App() {
 
     const targetWO = workOrders.find(wo => wo.id === woId);
     const targetJC = targetWO?.jobCards?.find(j => j.id === jcId);
-    const currentStatus = targetJC ? targetJC.status : 'In Progress';
+    const currentStatus = targetJC ? targetJC.status : 'Work In Progress';
     frappe.syncJobCardToERP(jcId, currentStatus, finalRemarks);
   };
 
@@ -1817,11 +2198,24 @@ function App() {
     const wipWarehouse = data.get('wipWarehouse') || 'Work In Progress - AD';
 
     const product = woProductsList.find(p => p.code === productCode) || PRODUCTS.find(p => p.code === productCode);
-    if (!product) return;
+
+    if (!productCode || !product) {
+      showAlert('Please select a valid Item to manufacture.', 'warning', 'Missing Item');
+      return;
+    }
+
+    if (!bomNo) {
+      showAlert('Please select an active submitted BOM for this item.', 'warning', 'Missing BOM');
+      return;
+    }
+
+    if (!quantity || quantity <= 0) {
+      showAlert('Please enter a valid quantity.', 'warning', 'Invalid Quantity');
+      return;
+    }
 
     setWoCreating(true);
     const plannedDateStr = plannedStart ? plannedStart.replace('T', ' ') : new Date().toISOString().replace('T', ' ').substring(0, 19);
-    console.log(product)
     const newWO = {
       // product: product.name,
       product: product.code,
@@ -1930,7 +2324,7 @@ function App() {
     try {
       const isLiveActive = settingsUrl && settingsApiKey && settingsApiSecret;
       const result = await frappe.login(settingsUrl, settingsApiKey, settingsApiSecret, !!isLiveActive);
-      
+
       if (result.success) {
         setSyncStatusMsg('Connection settings synced successfully!');
         setCurrentUser(result.user);
@@ -1947,7 +2341,7 @@ function App() {
     }
   };
 
-  const filteredWorkOrders = workOrders.filter(wo => 
+  const filteredWorkOrders = workOrders.filter(wo =>
     wo.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
     wo.product.toLowerCase().includes(searchQuery.toLowerCase())
   );
@@ -1957,7 +2351,7 @@ function App() {
     : filteredWorkOrders.slice((currentPage - 1) * recordsPerPage, currentPage * recordsPerPage);
 
   const totalWOPages = isLoggedIn && frappe.getConnectionSettings().isLive
-    ? 5 
+    ? 5
     : Math.max(1, Math.ceil(filteredWorkOrders.length / recordsPerPage));
 
   // Render Login page if offline/not authenticated
@@ -1974,7 +2368,7 @@ function App() {
             <button onClick={() => setIs2FAPhase('none')} className="btn-back" type="button">
               ← Back to login
             </button>
-            
+
             <div className="login-header" style={{ textAlign: 'center' }}>
               <div className="totp-icon-header">🛡️</div>
               <h2>Setup Authenticator</h2>
@@ -2169,7 +2563,7 @@ function App() {
 
 
   const filteredMaintRecords = maintenanceRecords.filter(rec => {
-    const matchesSearch = !maintSearchQuery || 
+    const matchesSearch = !maintSearchQuery ||
       (rec.id && rec.id.toLowerCase().includes(maintSearchQuery.toLowerCase())) ||
       (rec.operator && rec.operator.toLowerCase().includes(maintSearchQuery.toLowerCase())) ||
       (rec.supervisor && rec.supervisor.toLowerCase().includes(maintSearchQuery.toLowerCase())) ||
@@ -2181,7 +2575,7 @@ function App() {
   });
 
   const filteredSafetyRecords = safetyRecords.filter(rec => {
-    const matchesSearch = !safetySearchQuery || 
+    const matchesSearch = !safetySearchQuery ||
       (rec.id && rec.id.toLowerCase().includes(safetySearchQuery.toLowerCase())) ||
       (rec.type && rec.type.toLowerCase().includes(safetySearchQuery.toLowerCase())) ||
       (rec.operator && rec.operator.toLowerCase().includes(safetySearchQuery.toLowerCase())) ||
@@ -2193,7 +2587,7 @@ function App() {
   });
 
   const filteredLabRecords = laboratoryRecords.filter(rec => {
-    const matchesSearch = !labSearchQuery || 
+    const matchesSearch = !labSearchQuery ||
       (rec.id && rec.id.toLowerCase().includes(labSearchQuery.toLowerCase())) ||
       (rec.type && rec.type.toLowerCase().includes(labSearchQuery.toLowerCase())) ||
       (rec.analyst && rec.analyst.toLowerCase().includes(labSearchQuery.toLowerCase())) ||
@@ -2247,73 +2641,73 @@ function App() {
           </div>
 
           <nav className="sidebar-nav">
-            <button 
+            <button
               className={`nav-item ${currentTab === 'workflow' ? 'active' : ''}`}
               onClick={() => { setCurrentTab('workflow'); setMobileMenuOpen(false); }}
             >
               🔄 Business Workflow
             </button>
-            <button 
+            <button
               className={`nav-item ${currentTab === 'dashboard' ? 'active' : ''}`}
               onClick={() => { setCurrentTab('dashboard'); setSelectedWOId(null); setMobileMenuOpen(false); }}
             >
               📊 Dashboard
             </button>
-            <button 
+            <button
               className={`nav-item ${currentTab === 'work-orders' ? 'active' : ''}`}
               onClick={() => { setCurrentTab('work-orders'); setMobileMenuOpen(false); }}
             >
               📋 Work Orders
             </button>
-            <button 
+            <button
               className={`nav-item ${currentTab === 'inventory' ? 'active' : ''}`}
               onClick={() => { setCurrentTab('inventory'); setMobileMenuOpen(false); }}
             >
               📦 Stock / Inventory
             </button>
-            <button 
+            <button
               className={`nav-item ${currentTab === 'sales' ? 'active' : ''}`}
               onClick={() => { setCurrentTab('sales'); setMobileMenuOpen(false); }}
             >
               💰 Sales Desk
             </button>
-            <button 
+            <button
               className={`nav-item ${currentTab === 'bom' ? 'active' : ''}`}
               onClick={() => { setCurrentTab('bom'); setMobileMenuOpen(false); }}
             >
               🧪 BOM Recipes
             </button>
-            <button 
+            <button
               className={`nav-item ${currentTab === 'maintenance' ? 'active' : ''}`}
               onClick={() => { setCurrentTab('maintenance'); setMobileMenuOpen(false); }}
             >
               🔧 Maintenance
             </button>
-            <button 
+            <button
               className={`nav-item ${currentTab === 'safety' ? 'active' : ''}`}
               onClick={() => { setCurrentTab('safety'); setMobileMenuOpen(false); }}
             >
               🦺 Health & Safety
             </button>
-            <button 
+            <button
               className={`nav-item ${currentTab === 'laboratory' ? 'active' : ''}`}
               onClick={() => { setCurrentTab('laboratory'); setMobileMenuOpen(false); }}
             >
               🔬 Laboratory
             </button>
-            <button 
+            <button
               className={`nav-item ${currentTab === 'cleaning' ? 'active' : ''}`}
               onClick={() => { setCurrentTab('cleaning'); setMobileMenuOpen(false); }}
             >
               🧹 Cleaning & Sanitation
             </button>
-            <button 
+            <button
               className={`nav-item ${currentTab === 'support' ? 'active' : ''}`}
               onClick={() => { setCurrentTab('support'); setMobileMenuOpen(false); }}
             >
               🎧 Support Helpdesk
             </button>
-            <button 
+            <button
               className={`nav-item ${currentTab === 'hr' ? 'active' : ''}`}
               onClick={() => { setCurrentTab('hr'); setMobileMenuOpen(false); }}
             >
@@ -2370,17 +2764,17 @@ function App() {
           <div className="header-actions">
             <div className="search-container">
               <span className="search-icon">🔍</span>
-              <input 
-                type="text" 
-                placeholder="Search work orders, items..." 
+              <input
+                type="text"
+                placeholder="Search work orders, items..."
                 className="search-input"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
-            
+
             <div style={{ position: 'relative' }}>
-              <button 
+              <button
                 className="notification-bell"
                 onClick={() => setShowNotifications(!showNotifications)}
               >
@@ -2432,14 +2826,14 @@ function App() {
             <div className="date-selector" title={`Time zone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}`}>
               <span>📅</span>
               <span>
-                {currentTime.toLocaleDateString(undefined, { 
-                  year: 'numeric', 
-                  month: 'short', 
-                  day: 'numeric' 
-                })} {currentTime.toLocaleTimeString(undefined, { 
-                  hour: '2-digit', 
-                  minute: '2-digit', 
-                  second: '2-digit' 
+                {currentTime.toLocaleDateString(undefined, {
+                  year: 'numeric',
+                  month: 'short',
+                  day: 'numeric'
+                })} {currentTime.toLocaleTimeString(undefined, {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  second: '2-digit'
                 })}
               </span>
             </div>
@@ -2457,24 +2851,24 @@ function App() {
                   <h3>Work Orders</h3>
                   <div className="flow-value">{workOrders.length}</div>
                   <div className="flow-status text-muted">
-                    <span style={{color: 'var(--info)'}}>●</span> {activeWOsCount} Active | {pendingWOsCount} Scheduled
+                    <span style={{ color: 'var(--info)' }}>●</span> {activeWOsCount} Active | {pendingWOsCount} Scheduled
                   </div>
                 </div>
               </div>
-              
+
               <div className="flow-arrow">➔</div>
-              
+
               <div className="flow-card" onClick={() => setCurrentTab('work-orders')}>
                 <div className="flow-icon-container">⚙️</div>
                 <div className="flow-details">
                   <h3>Job Cards</h3>
                   <div className="flow-value">{inProgressJobCardsCount + 15}</div>
                   <div className="flow-status text-muted">
-                    <span style={{color: 'var(--warning)'}}>●</span> {inProgressJobCardsCount} In Progress
+                    <span style={{ color: 'var(--warning)' }}>●</span> {inProgressJobCardsCount} In Process
                   </div>
                 </div>
               </div>
-              
+
               <div className="flow-arrow">➔</div>
 
               <div className="flow-card green" onClick={() => setCurrentTab('inventory')}>
@@ -2557,8 +2951,8 @@ function App() {
                       </div>
                     </div>
                   </div>
-                  <button 
-                    className="fullscreen-btn" 
+                  <button
+                    className="fullscreen-btn"
                     style={{ position: 'absolute', top: '10px', right: '10px', zIndex: 10, background: 'rgba(0,0,0,0.5)', border: 'none', color: '#fff', borderRadius: '4px', width: '32px', height: '32px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px' }}
                     onClick={() => setFullscreenElement('live1')}
                     title="Fullscreen Feed"
@@ -2609,8 +3003,8 @@ function App() {
                       </div>
                     </div>
                   </div>
-                  <button 
-                    className="fullscreen-btn" 
+                  <button
+                    className="fullscreen-btn"
                     style={{ position: 'absolute', top: '10px', right: '10px', zIndex: 10, background: 'rgba(0,0,0,0.5)', border: 'none', color: '#fff', borderRadius: '4px', width: '32px', height: '32px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px' }}
                     onClick={() => setFullscreenElement('live2')}
                     title="Fullscreen Feed"
@@ -2651,8 +3045,8 @@ function App() {
               <div className="details-card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <div className="details-card-header" style={{ marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <h3 className="details-card-title">Plant OEE Metrics (%)</h3>
-                  <button 
-                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '16px', padding: '4px' }} 
+                  <button
+                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '16px', padding: '4px' }}
                     onClick={() => setFullscreenElement('chartOee')}
                     title="Fullscreen Chart"
                   >
@@ -2683,8 +3077,8 @@ function App() {
               <div className="details-card" style={{ padding: '20px' }}>
                 <div className="details-card-header" style={{ marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <h3 className="details-card-title">Hourly Water Flow Rate (L/min)</h3>
-                  <button 
-                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '16px', padding: '4px' }} 
+                  <button
+                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '16px', padding: '4px' }}
                     onClick={() => setFullscreenElement('chartFlow')}
                     title="Fullscreen Chart"
                   >
@@ -2695,18 +3089,18 @@ function App() {
                   <svg width="100%" height="100%" viewBox="0 0 400 100" preserveAspectRatio="none">
                     <defs>
                       <linearGradient id="flow-glow" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="var(--info)" stopOpacity="0.4"/>
-                        <stop offset="100%" stopColor="var(--info)" stopOpacity="0"/>
+                        <stop offset="0%" stopColor="var(--info)" stopOpacity="0.4" />
+                        <stop offset="100%" stopColor="var(--info)" stopOpacity="0" />
                       </linearGradient>
                     </defs>
-                    <path 
-                      d="M 0 80 Q 50 60 100 70 T 200 45 T 300 55 T 400 35 L 400 100 L 0 100 Z" 
+                    <path
+                      d="M 0 80 Q 50 60 100 70 T 200 45 T 300 55 T 400 35 L 400 100 L 0 100 Z"
                       fill="url(#flow-glow)"
                     />
-                    <path 
-                      d="M 0 80 Q 50 60 100 70 T 200 45 T 300 55 T 400 35" 
-                      fill="none" 
-                      stroke="var(--info)" 
+                    <path
+                      d="M 0 80 Q 50 60 100 70 T 200 45 T 300 55 T 400 35"
+                      fill="none"
+                      stroke="var(--info)"
                       strokeWidth="2.5"
                     />
                   </svg>
@@ -2724,8 +3118,8 @@ function App() {
               <div className="details-card" style={{ padding: '20px' }}>
                 <div className="details-card-header" style={{ marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <h3 className="details-card-title">Product Defect Breakdown</h3>
-                  <button 
-                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '16px', padding: '4px' }} 
+                  <button
+                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '16px', padding: '4px' }}
                     onClick={() => setFullscreenElement('chartDefects')}
                     title="Fullscreen Chart"
                   >
@@ -2735,11 +3129,11 @@ function App() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '20px', height: '110px', marginTop: '16px' }}>
                   <svg width="80" height="80" viewBox="0 0 36 36">
                     <circle cx="18" cy="18" r="15.915" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="3" />
-                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--danger)" strokeWidth="3.2" 
+                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--danger)" strokeWidth="3.2"
                       strokeDasharray="60 40" strokeDashoffset="25" />
-                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--warning)" strokeWidth="3.2" 
+                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--warning)" strokeWidth="3.2"
                       strokeDasharray="30 70" strokeDashoffset="85" />
-                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--info)" strokeWidth="3.2" 
+                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--info)" strokeWidth="3.2"
                       strokeDasharray="10 90" strokeDashoffset="115" />
                   </svg>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11px' }}>
@@ -2766,11 +3160,11 @@ function App() {
                 <div className="details-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
                   <h3 className="details-card-title">Work Order Monitor</h3>
                   <div style={{ display: 'flex', gap: '8px' }}>
-                    <input 
-                      type="text" 
-                      className="text-input" 
+                    <input
+                      type="text"
+                      className="text-input"
                       style={{ width: '200px', padding: '6px 12px', fontSize: '12px' }}
-                      placeholder="Search Work Orders..." 
+                      placeholder="Search Work Orders..."
                       value={searchQuery}
                       onChange={e => setSearchQuery(e.target.value)}
                     />
@@ -2793,7 +3187,7 @@ function App() {
                       {filteredWorkOrders.slice((woMonitorPage - 1) * 20, woMonitorPage * 20).map(wo => {
                         let pct = wo.produced ? ((wo.produced / wo.quantity) * 100) : 0;
                         if (wo.status === 'Completed') pct = 100;
-                        
+
                         return (
                           <tr key={wo.id}>
                             <td style={{ fontWeight: '600' }}>{wo.id}</td>
@@ -2817,9 +3211,9 @@ function App() {
                   </table>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', marginTop: '16px', padding: '0 20px 20px 20px' }}>
-                  <button 
-                    className="secondary-btn" 
-                    disabled={woMonitorPage === 1} 
+                  <button
+                    className="secondary-btn"
+                    disabled={woMonitorPage === 1}
                     onClick={() => setWoMonitorPage(prev => Math.max(1, prev - 1))}
                   >
                     ◀ Previous
@@ -2827,9 +3221,9 @@ function App() {
                   <span style={{ fontSize: '13px', fontWeight: '600' }}>
                     Page {woMonitorPage} of {Math.max(1, Math.ceil(filteredWorkOrders.length / 20))}
                   </span>
-                  <button 
-                    className="secondary-btn" 
-                    disabled={woMonitorPage === Math.max(1, Math.ceil(filteredWorkOrders.length / 20))} 
+                  <button
+                    className="secondary-btn"
+                    disabled={woMonitorPage === Math.max(1, Math.ceil(filteredWorkOrders.length / 20))}
                     onClick={() => setWoMonitorPage(prev => Math.min(Math.max(1, Math.ceil(filteredWorkOrders.length / 20)), prev + 1))}
                   >
                     Next ▶
@@ -2887,20 +3281,20 @@ function App() {
                           <span className={`badge badge-${wo.status.toLowerCase().replace(' ', '-')}`}>
                             {wo.status}
                           </span>
-                          {wo.status === 'Pending' && (
+                          {WORK_ORDER_STARTABLE_STATUSES.includes(wo.status) && (
                             <button className="primary-btn" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={() => handleStartWorkOrder(wo.id)}>
                               Start Run
                             </button>
                           )}
-                          <button 
-                            className="secondary-btn" 
+                          <button
+                            className="secondary-btn"
                             style={{ padding: '6px 12px', fontSize: '12px' }}
                             onClick={() => setSelectedWOId(isSelected ? null : wo.id)}
                           >
                             {isSelected ? 'Collapse' : 'Show Operations'}
                           </button>
-                          <button 
-                            className="secondary-btn" 
+                          <button
+                            className="secondary-btn"
                             style={{ padding: '6px 12px', fontSize: '12px', borderColor: 'var(--danger)', color: 'var(--danger)' }}
                             onClick={() => handleDeleteWorkOrder(wo.id)}
                           >
@@ -2941,7 +3335,7 @@ function App() {
                       {isSelected && (
                         <div className="job-cards-section">
                           <h4 className="section-subtitle">Operational Job Cards ({wo.jobCards ? wo.jobCards.length : 0})</h4>
-                          
+
                           {(!wo.jobCards || wo.jobCards.length === 0) ? (
                             <p className="text-muted" style={{ fontSize: '13px', padding: '10px 0' }}>
                               Work Order not started yet. Hit "Start Run" above to auto-generate checklist cards.
@@ -2975,7 +3369,7 @@ function App() {
                                       return null;
                                     })()}
                                   </div>
-                                  
+
                                   <div className="jc-operator-log text-muted">
                                     {jc.operator ? (
                                       <span>👤 {jc.operator}</span>
@@ -2993,8 +3387,9 @@ function App() {
                                   {/* Dynamic actions block matching work order.png */}
                                   <div className="jc-actions" style={{ gap: '4px' }}>
                                     {/* Action: Start */}
-                                    {jc.status === 'Not Started' && wo.status === 'In Progress' && (
-                                      <button 
+                                    {/* {jc.status === 'Not Started' && wo.status === 'In Progress' && ( */}
+                                    {JOB_CARD_STARTABLE_STATUSES.includes(jc.status) && (WORK_ORDER_ACTIVE_STATUSES.includes(wo.status) || wo.materialTransferred) && (
+                                      <button
                                         className="action-btn-small start"
                                         onClick={() => handleStartJobCard(wo.id, jc.id)}
                                       >
@@ -3003,16 +3398,16 @@ function App() {
                                     )}
 
                                     {/* Actions: Pause, Finish */}
-                                    {jc.status === 'In Progress' && wo.status === 'In Progress' && (
+                                    {JOB_CARD_RUNNING_STATUSES.includes(jc.status) && (WORK_ORDER_ACTIVE_STATUSES.includes(wo.status) || wo.materialTransferred) && (
                                       <>
-                                        <button 
+                                        <button
                                           className="action-btn-small"
                                           style={{ backgroundColor: 'var(--warning)', color: '#111' }}
                                           onClick={() => setActiveJCOp({ woId: wo.id, jcId: jc.id, operation: jc.operation, action: 'pause' })}
                                         >
                                           ⏸ Pause
                                         </button>
-                                        <button 
+                                        <button
                                           className="action-btn-small complete"
                                           onClick={() => setActiveJCOp({ woId: wo.id, jcId: jc.id, operation: jc.operation, action: 'finish' })}
                                         >
@@ -3022,15 +3417,15 @@ function App() {
                                     )}
 
                                     {/* Actions: Resume, Finish, Add Remarks */}
-                                    {jc.status === 'Paused' && wo.status === 'In Progress' && (
+                                    {JOB_CARD_PAUSED_STATUSES.includes(jc.status) && (WORK_ORDER_ACTIVE_STATUSES.includes(wo.status) || wo.materialTransferred) && (
                                       <>
-                                        <button 
+                                        <button
                                           className="action-btn-small start"
                                           onClick={() => handleResumeJobCard(wo.id, jc.id)}
                                         >
                                           ▶ Resume
                                         </button>
-                                        <button 
+                                        <button
                                           className="action-btn-small complete"
                                           onClick={() => setActiveJCOp({ woId: wo.id, jcId: jc.id, operation: jc.operation, action: 'finish' })}
                                         >
@@ -3045,7 +3440,7 @@ function App() {
                                     )}
 
                                     {/* Action: Remarks (Unified entrypoint for viewing history and adding new remarks) */}
-                                    <button 
+                                    <button
                                       className="action-btn-small remarks"
                                       style={{ padding: '6px 8px' }}
                                       onClick={() => {
@@ -3071,9 +3466,9 @@ function App() {
 
             {/* Pagination Controls */}
             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', marginTop: '24px' }}>
-              <button 
-                className="secondary-btn" 
-                disabled={currentPage === 1 || woLoading} 
+              <button
+                className="secondary-btn"
+                disabled={currentPage === 1 || woLoading}
                 onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
               >
                 ◀ Previous
@@ -3081,9 +3476,9 @@ function App() {
               <span style={{ fontSize: '14px', fontWeight: '600' }}>
                 Page {currentPage} of {totalWOPages}
               </span>
-              <button 
-                className="secondary-btn" 
-                disabled={currentPage === totalWOPages || woLoading} 
+              <button
+                className="secondary-btn"
+                disabled={currentPage === totalWOPages || woLoading}
                 onClick={() => setCurrentPage(prev => Math.min(totalWOPages, prev + 1))}
               >
                 Next ▶
@@ -3097,11 +3492,11 @@ function App() {
           const conn = frappe.getConnectionSettings();
           const isLiveMode = conn.isLive && conn.connected;
 
-          const allInvItems = isLiveMode 
-            ? erpItems 
+          const allInvItems = isLiveMode
+            ? erpItems
             : Object.keys(inventory).map(code => ({ code, ...inventory[code] }));
 
-          const filteredInvItems = allInvItems.filter(item => 
+          const filteredInvItems = allInvItems.filter(item =>
             item.code.toLowerCase().includes(invSearchQuery.toLowerCase()) ||
             item.name.toLowerCase().includes(invSearchQuery.toLowerCase()) ||
             (item.category || '').toLowerCase().includes(invSearchQuery.toLowerCase())
@@ -3119,11 +3514,11 @@ function App() {
                   <p>Monitor raw ingredients, bottle components, caps, and final finished goods boxes.</p>
                 </div>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <input 
-                    type="text" 
-                    className="text-input" 
+                  <input
+                    type="text"
+                    className="text-input"
                     style={{ width: '200px', padding: '6px 12px', fontSize: '12px' }}
-                    placeholder="Search Inventory..." 
+                    placeholder="Search Inventory..."
                     value={invSearchQuery}
                     onChange={e => setInvSearchQuery(e.target.value)}
                   />
@@ -3168,8 +3563,8 @@ function App() {
                             const isSelected = selectedItemCode === item.code;
 
                             return (
-                              <tr 
-                                key={item.code} 
+                              <tr
+                                key={item.code}
                                 onClick={() => setSelectedItemCode(item.code)}
                                 style={{ cursor: 'pointer', backgroundColor: isSelected ? 'rgba(245, 158, 11, 0.08)' : '' }}
                                 className={isSelected ? 'active-row' : ''}
@@ -3203,9 +3598,9 @@ function App() {
                   )}
                   {/* Pagination Controls */}
                   <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', marginTop: '16px', padding: '16px 0' }}>
-                    <button 
-                      className="secondary-btn" 
-                      disabled={invPage === 1} 
+                    <button
+                      className="secondary-btn"
+                      disabled={invPage === 1}
                       onClick={() => setInvPage(prev => Math.max(1, prev - 1))}
                     >
                       ◀ Previous
@@ -3213,9 +3608,9 @@ function App() {
                     <span style={{ fontSize: '13px', fontWeight: '600' }}>
                       Page {invPage} of {totalInvPages}
                     </span>
-                    <button 
-                      className="secondary-btn" 
-                      disabled={invPage === totalInvPages} 
+                    <button
+                      className="secondary-btn"
+                      disabled={invPage === totalInvPages}
                       onClick={() => setInvPage(prev => Math.min(totalInvPages, prev + 1))}
                     >
                       Next ▶
@@ -3264,10 +3659,10 @@ function App() {
                           </div>
                           <div style={{ height: '40px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px', overflow: 'hidden', padding: '4px' }}>
                             <svg width="100%" height="100%" viewBox="0 0 100 30" preserveAspectRatio="none">
-                              <path 
-                                d="M 0 25 Q 15 15 30 20 T 60 10 T 90 5" 
-                                fill="none" 
-                                stroke="var(--success)" 
+                              <path
+                                d="M 0 25 Q 15 15 30 20 T 60 10 T 90 5"
+                                fill="none"
+                                stroke="var(--success)"
                                 strokeWidth="2"
                               />
                             </svg>
@@ -3281,10 +3676,10 @@ function App() {
                           </div>
                           <div style={{ height: '40px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px', overflow: 'hidden', padding: '4px' }}>
                             <svg width="100%" height="100%" viewBox="0 0 100 30" preserveAspectRatio="none">
-                              <path 
-                                d="M 0 20 Q 25 15 50 25 T 100 12" 
-                                fill="none" 
-                                stroke="var(--warning)" 
+                              <path
+                                d="M 0 20 Q 25 15 50 25 T 100 12"
+                                fill="none"
+                                stroke="var(--warning)"
                                 strokeWidth="2"
                               />
                             </svg>
@@ -3338,8 +3733,8 @@ function App() {
                   </div>
                 ) : (
                   bomList.map(bom => (
-                    <div 
-                      key={bom.id} 
+                    <div
+                      key={bom.id}
                       className={`bom-list-item ${selectedBomId === bom.id ? 'active' : ''}`}
                       onClick={() => setSelectedBomId(bom.id)}
                     >
@@ -3348,13 +3743,13 @@ function App() {
                     </div>
                   ))
                 )}
-                
+
                 {/* BOM Pagination */}
                 <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', padding: '12px', borderTop: '1px solid var(--border-color)' }}>
-                  <button 
-                    className="secondary-btn" 
+                  <button
+                    className="secondary-btn"
                     style={{ padding: '4px 8px', fontSize: '11px' }}
-                    disabled={bomPage === 1 || bomLoading} 
+                    disabled={bomPage === 1 || bomLoading}
                     onClick={() => setBomPage(prev => Math.max(1, prev - 1))}
                   >
                     ◀ Previous
@@ -3362,10 +3757,10 @@ function App() {
                   <span style={{ fontSize: '11px', fontWeight: '600' }}>
                     Page {bomPage}
                   </span>
-                  <button 
-                    className="secondary-btn" 
+                  <button
+                    className="secondary-btn"
                     style={{ padding: '4px 8px', fontSize: '11px' }}
-                    disabled={bomList.length < 20 || bomLoading} 
+                    disabled={bomList.length < 20 || bomLoading}
                     onClick={() => setBomPage(prev => prev + 1)}
                   >
                     Next ▶
@@ -3381,9 +3776,9 @@ function App() {
                       Quantities specified below are required to produce the finished goods carton.
                     </p>
                   </div>
-                  <button 
-                    className="primary-btn no-print" 
-                    onClick={() => window.print()} 
+                  <button
+                    className="primary-btn no-print"
+                    onClick={() => window.print()}
                     style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 14px', fontSize: '12px', cursor: 'pointer', backgroundColor: 'var(--accent)', borderColor: 'var(--accent)', color: '#fff' }}
                   >
                     🖨️ Print Formula
@@ -3425,13 +3820,13 @@ function App() {
 
         {/* Sales Tab */}
         {currentTab === 'sales' && (() => {
-          const filteredInvoices = salesInvoicesList.filter(inv => 
+          const filteredInvoices = salesInvoicesList.filter(inv =>
             inv.name.toLowerCase().includes(salesSearchQuery.toLowerCase()) ||
             inv.customer.toLowerCase().includes(salesSearchQuery.toLowerCase()) ||
             inv.status.toLowerCase().includes(salesSearchQuery.toLowerCase())
           );
 
-          const filteredDeliveryNotes = deliveryNotesList.filter(dn => 
+          const filteredDeliveryNotes = deliveryNotesList.filter(dn =>
             dn.name.toLowerCase().includes(salesSearchQuery.toLowerCase()) ||
             dn.customer.toLowerCase().includes(salesSearchQuery.toLowerCase()) ||
             dn.status.toLowerCase().includes(salesSearchQuery.toLowerCase())
@@ -3446,16 +3841,16 @@ function App() {
                 </div>
                 <div style={{ display: 'flex', gap: '10px' }}>
                   {salesSubTab === 'invoice' ? (
-                    <button 
-                      className="primary-btn" 
+                    <button
+                      className="primary-btn"
                       onClick={() => setShowCreateInvoiceModal(true)}
                       style={{ backgroundColor: 'var(--accent)', borderColor: 'var(--accent)' }}
                     >
                       + Create Sales Invoice
                     </button>
                   ) : (
-                    <button 
-                      className="primary-btn" 
+                    <button
+                      className="primary-btn"
                       onClick={() => setShowCreateDeliveryNoteModal(true)}
                       style={{ backgroundColor: 'var(--accent)', borderColor: 'var(--accent)' }}
                     >
@@ -3467,14 +3862,14 @@ function App() {
 
               {/* Sub-tabs toggles */}
               <div className="sub-tabs-container" style={{ display: 'flex', gap: '8px', borderBottom: '2px solid var(--border-color)', marginBottom: '20px', paddingBottom: '2px' }}>
-                <button 
+                <button
                   className={`tab-btn ${salesSubTab === 'invoice' ? 'active' : ''}`}
                   style={{ padding: '8px 16px', fontSize: '13px', fontWeight: '700', border: 'none', borderBottom: salesSubTab === 'invoice' ? '3px solid var(--accent)' : 'none', background: 'none', cursor: 'pointer', color: salesSubTab === 'invoice' ? 'var(--accent)' : 'var(--text-muted)' }}
                   onClick={() => { setSalesSubTab('invoice'); setSelectedInvoice(null); }}
                 >
                   📝 Sales Invoices
                 </button>
-                <button 
+                <button
                   className={`tab-btn ${salesSubTab === 'delivery' ? 'active' : ''}`}
                   style={{ padding: '8px 16px', fontSize: '13px', fontWeight: '700', border: 'none', borderBottom: salesSubTab === 'delivery' ? '3px solid var(--accent)' : 'none', background: 'none', cursor: 'pointer', color: salesSubTab === 'delivery' ? 'var(--accent)' : 'var(--text-muted)' }}
                   onClick={() => { setSalesSubTab('delivery'); setSelectedDeliveryNote(null); }}
@@ -3485,13 +3880,13 @@ function App() {
 
               {/* Content body split layout */}
               <div className="bom-explorer-grid">
-                
+
                 {/* Left Column: List with pagination */}
                 <div className="bom-list">
                   <div style={{ paddingBottom: '8px' }}>
-                    <input 
-                      type="text" 
-                      className="text-input" 
+                    <input
+                      type="text"
+                      className="text-input"
                       style={{ width: '100%', padding: '6px 12px', fontSize: '11px' }}
                       placeholder={salesSubTab === 'invoice' ? "Search Invoices..." : "Search Delivery Notes..."}
                       value={salesSearchQuery}
@@ -3501,7 +3896,7 @@ function App() {
                   <div className="bom-list-header" style={{ textTransform: 'uppercase', fontSize: '11px', letterSpacing: '0.5px' }}>
                     {salesSubTab === 'invoice' ? 'Invoices List' : 'Delivery Notes List'}
                   </div>
-                  
+
                   {salesLoading ? (
                     <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>
                       Loading data...
@@ -3510,283 +3905,284 @@ function App() {
                     filteredInvoices.length === 0 ? (
                       <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>No invoices found.</div>
                     ) : (
-                    filteredInvoices.map(inv => (
-                      <div 
-                        key={inv.name}
-                        className={`bom-list-item ${selectedInvoice?.name === inv.name ? 'active' : ''}`}
-                        onClick={async () => {
-                          setSalesLoading(true);
-                          try {
-                            const details = await frappe.getSalesInvoiceDetails(inv.name);
-                            setSelectedInvoice(details);
-                          } catch (err) {
-                            console.error(err);
-                          } finally {
-                            setSalesLoading(false);
-                          }
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontWeight: '700', color: 'var(--accent)' }}>{inv.name}</span>
-                          <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: inv.status === 'Paid' ? 'rgba(16, 185, 129, 0.1)' : inv.status === 'Draft' ? 'rgba(156, 163, 175, 0.1)' : 'rgba(239, 68, 68, 0.1)', color: inv.status === 'Paid' ? 'var(--success)' : inv.status === 'Draft' ? 'var(--text-muted)' : 'var(--danger)', fontWeight: 'bold' }}>{inv.status}</span>
-                        </div>
-                        <div style={{ fontSize: '11px', marginTop: '4px', display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)' }}>
-                          <span>{inv.customer}</span>
-                          <strong>${Number(inv.grand_total || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
-                        </div>
-                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                          📅 {inv.posting_date}
-                        </div>
-                      </div>
-                    ))
-                  )
-                ) : (
-                  filteredDeliveryNotes.length === 0 ? (
-                    <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>No delivery notes found.</div>
-                  ) : (
-                    filteredDeliveryNotes.map(dn => (
-                      <div 
-                        key={dn.name}
-                        className={`bom-list-item ${selectedDeliveryNote?.name === dn.name ? 'active' : ''}`}
-                        onClick={async () => {
-                          setSalesLoading(true);
-                          try {
-                            const details = await frappe.getDeliveryNoteDetails(dn.name);
-                            setSelectedDeliveryNote(details);
-                          } catch (err) {
-                            console.error(err);
-                          } finally {
-                            setSalesLoading(false);
-                          }
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontWeight: '700', color: 'var(--accent)' }}>{dn.name}</span>
-                          <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: dn.status === 'Completed' ? 'rgba(16, 185, 129, 0.1)' : dn.status === 'Draft' ? 'rgba(156, 163, 175, 0.1)' : 'rgba(245, 158, 11, 0.1)', color: dn.status === 'Completed' ? 'var(--success)' : dn.status === 'Draft' ? 'var(--text-muted)' : 'var(--warning)', fontWeight: 'bold' }}>{dn.status}</span>
-                        </div>
-                        <div style={{ fontSize: '11px', marginTop: '4px', display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)' }}>
-                          <span>{dn.customer}</span>
-                          <strong>${Number(dn.grand_total || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
-                        </div>
-                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                          📅 {dn.posting_date}
-                        </div>
-                      </div>
-                    ))
-                  )
-                )}
-
-                {/* Left Side Pagination */}
-                {salesSubTab === 'invoice' ? (
-                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', padding: '12px', borderTop: '1px solid var(--border-color)', marginTop: 'auto' }}>
-                    <button 
-                      className="secondary-btn" 
-                      style={{ padding: '4px 8px', fontSize: '11px' }}
-                      disabled={salesInvoicePage === 1 || salesLoading}
-                      onClick={() => setSalesInvoicePage(prev => Math.max(1, prev - 1))}
-                    >
-                      ◀ Previous
-                    </button>
-                    <span style={{ fontSize: '11px', fontWeight: '600' }}>Page {salesInvoicePage}</span>
-                    <button 
-                      className="secondary-btn" 
-                      style={{ padding: '4px 8px', fontSize: '11px' }}
-                      disabled={salesInvoicesList.length < 20 || salesLoading}
-                      onClick={() => setSalesInvoicePage(prev => prev + 1)}
-                    >
-                      Next ▶
-                    </button>
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', padding: '12px', borderTop: '1px solid var(--border-color)', marginTop: 'auto' }}>
-                    <button 
-                      className="secondary-btn" 
-                      style={{ padding: '4px 8px', fontSize: '11px' }}
-                      disabled={deliveryNotePage === 1 || salesLoading}
-                      onClick={() => setDeliveryNotePage(prev => Math.max(1, prev - 1))}
-                    >
-                      ◀ Previous
-                    </button>
-                    <span style={{ fontSize: '11px', fontWeight: '600' }}>Page {deliveryNotePage}</span>
-                    <button 
-                      className="secondary-btn" 
-                      style={{ padding: '4px 8px', fontSize: '11px' }}
-                      disabled={deliveryNotesList.length < 20 || salesLoading}
-                      onClick={() => setDeliveryNotePage(prev => prev + 1)}
-                    >
-                      Next ▶
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* Right Column: Standard Format Detail View */}
-              <div className="bom-recipe-panel" style={{ display: 'flex', flexDirection: 'column' }}>
-                {salesSubTab === 'invoice' ? (
-                  !selectedInvoice ? (
-                    <div style={{ display: 'flex', flex: 1, flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '40px', color: 'var(--text-muted)' }}>
-                      <span style={{ fontSize: '48px', marginBottom: '12px' }}>📄</span>
-                      <h3>Select a Sales Invoice</h3>
-                      <p style={{ fontSize: '13px' }}>Click an item on the left list to view invoice detail slip.</p>
-                    </div>
-                  ) : (
-                    <div className="print-report-container" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid var(--border-color)', paddingBottom: '16px' }}>
-                        <div>
-                          <h3 style={{ fontSize: '20px', fontWeight: '800', color: 'var(--text-heading)', margin: 0 }}>TAX INVOICE</h3>
-                          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Carpenters Water Fiji PTE Limited</span>
-                          <div style={{ marginTop: '8px', fontSize: '12px' }}>
-                            <strong>Bill To:</strong> {selectedInvoice.customer}<br />
-                            <strong>Tax ID:</strong> FJ-TIN-893240-Z
+                      filteredInvoices.map(inv => (
+                        <div
+                          key={inv.name}
+                          className={`bom-list-item ${selectedInvoice?.name === inv.name ? 'active' : ''}`}
+                          onClick={async () => {
+                            setSalesLoading(true);
+                            try {
+                              const details = await frappe.getSalesInvoiceDetails(inv.name);
+                              setSelectedInvoice(details);
+                            } catch (err) {
+                              console.error(err);
+                            } finally {
+                              setSalesLoading(false);
+                            }
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontWeight: '700', color: 'var(--accent)' }}>{inv.name}</span>
+                            <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: inv.status === 'Paid' ? 'rgba(16, 185, 129, 0.1)' : inv.status === 'Draft' ? 'rgba(156, 163, 175, 0.1)' : 'rgba(239, 68, 68, 0.1)', color: inv.status === 'Paid' ? 'var(--success)' : inv.status === 'Draft' ? 'var(--text-muted)' : 'var(--danger)', fontWeight: 'bold' }}>{inv.status}</span>
+                          </div>
+                          <div style={{ fontSize: '11px', marginTop: '4px', display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)' }}>
+                            <span>{inv.customer}</span>
+                            <strong>${Number(inv.grand_total || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                          </div>
+                          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            📅 {inv.posting_date}
                           </div>
                         </div>
-                        <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                          <svg width="60" height="60" style={{ border: '1px solid var(--border-color)', padding: '2px', backgroundColor: '#fff', borderRadius: '4px' }} viewBox="0 0 29 29">
-                            <path d="M0 0h7v7H0zm1 1v5h5V1zm8-1h1v1H9zm1 1h1v1h-1zm-2 1h1v1H8zm3 0h1v1h-1zM9 4h1v1H9zm2 0h1v1h-1zm-3 1h1v1H8zm1 1h1v1H9zM0 9h7v7H0zm1 1v5h5v-5zm11-2h1v1h-1zm-1 2h1v1h-1zm2 1h1v1h-1zm-2 2h1v1h-1zm1 1h1v1h-1zm3-6h1v1h-1zm-1 2h1v1h-1zm2 1h1v1h-1zm-2 2h1v1h-1zm1 1h1v1h-1zm5-7h7v7h-7zm1 1v5h5v-5zm-11 8h1v1h-1zm2 0h1v1h-1zm-1 1h1v1h-1zm-2 2h1v1h-1zm3 0h1v1h-1zm1 1h1v1h-1zm-3 1h1v1h-1zm2 1h1v1h-1zm-1 1h1v1h-1zm7-7h1v1h-1zm2 0h1v1h-1zm-1 1h1v1h-1zm-2 2h1v1h-1zm3 0h1v1h-1zm1 1h1v1h-1zm-3 1h1v1h-1zm2 1h1v1h-1zm-1 1h1v1h-1zm-7 2h1v1h-1zm2 0h1v1h-1zm-1 1h1v1h-1zm5-1h1v1h-1zm2 0h1v1h-1zm-1 1h1v1h-1z" fill="#111"/>
-                          </svg>
+                      ))
+                    )
+                  ) : (
+                    filteredDeliveryNotes.length === 0 ? (
+                      <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>No delivery notes found.</div>
+                    ) : (
+                      filteredDeliveryNotes.map(dn => (
+                        <div
+                          key={dn.name}
+                          className={`bom-list-item ${selectedDeliveryNote?.name === dn.name ? 'active' : ''}`}
+                          onClick={async () => {
+                            setSalesLoading(true);
+                            try {
+                              const details = await frappe.getDeliveryNoteDetails(dn.name);
+                              setSelectedDeliveryNote(details);
+                            } catch (err) {
+                              console.error(err);
+                            } finally {
+                              setSalesLoading(false);
+                            }
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontWeight: '700', color: 'var(--accent)' }}>{dn.name}</span>
+                            <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: dn.status === 'Completed' ? 'rgba(16, 185, 129, 0.1)' : dn.status === 'Draft' ? 'rgba(156, 163, 175, 0.1)' : 'rgba(245, 158, 11, 0.1)', color: dn.status === 'Completed' ? 'var(--success)' : dn.status === 'Draft' ? 'var(--text-muted)' : 'var(--warning)', fontWeight: 'bold' }}>{dn.status}</span>
+                          </div>
+                          <div style={{ fontSize: '11px', marginTop: '4px', display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)' }}>
+                            <span>{dn.customer}</span>
+                            <strong>${Number(dn.grand_total || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                          </div>
+                          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            📅 {dn.posting_date}
+                          </div>
+                        </div>
+                      ))
+                    )
+                  )}
+
+                  {/* Left Side Pagination */}
+                  {salesSubTab === 'invoice' ? (
+                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', padding: '12px', borderTop: '1px solid var(--border-color)', marginTop: 'auto' }}>
+                      <button
+                        className="secondary-btn"
+                        style={{ padding: '4px 8px', fontSize: '11px' }}
+                        disabled={salesInvoicePage === 1 || salesLoading}
+                        onClick={() => setSalesInvoicePage(prev => Math.max(1, prev - 1))}
+                      >
+                        ◀ Previous
+                      </button>
+                      <span style={{ fontSize: '11px', fontWeight: '600' }}>Page {salesInvoicePage}</span>
+                      <button
+                        className="secondary-btn"
+                        style={{ padding: '4px 8px', fontSize: '11px' }}
+                        disabled={salesInvoicesList.length < 20 || salesLoading}
+                        onClick={() => setSalesInvoicePage(prev => prev + 1)}
+                      >
+                        Next ▶
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', padding: '12px', borderTop: '1px solid var(--border-color)', marginTop: 'auto' }}>
+                      <button
+                        className="secondary-btn"
+                        style={{ padding: '4px 8px', fontSize: '11px' }}
+                        disabled={deliveryNotePage === 1 || salesLoading}
+                        onClick={() => setDeliveryNotePage(prev => Math.max(1, prev - 1))}
+                      >
+                        ◀ Previous
+                      </button>
+                      <span style={{ fontSize: '11px', fontWeight: '600' }}>Page {deliveryNotePage}</span>
+                      <button
+                        className="secondary-btn"
+                        style={{ padding: '4px 8px', fontSize: '11px' }}
+                        disabled={deliveryNotesList.length < 20 || salesLoading}
+                        onClick={() => setDeliveryNotePage(prev => prev + 1)}
+                      >
+                        Next ▶
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Right Column: Standard Format Detail View */}
+                <div className="bom-recipe-panel" style={{ display: 'flex', flexDirection: 'column' }}>
+                  {salesSubTab === 'invoice' ? (
+                    !selectedInvoice ? (
+                      <div style={{ display: 'flex', flex: 1, flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '40px', color: 'var(--text-muted)' }}>
+                        <span style={{ fontSize: '48px', marginBottom: '12px' }}>📄</span>
+                        <h3>Select a Sales Invoice</h3>
+                        <p style={{ fontSize: '13px' }}>Click an item on the left list to view invoice detail slip.</p>
+                      </div>
+                    ) : (
+                      <div className="print-report-container" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid var(--border-color)', paddingBottom: '16px' }}>
+                          <div>
+                            <h3 style={{ fontSize: '20px', fontWeight: '800', color: 'var(--text-heading)', margin: 0 }}>TAX INVOICE</h3>
+                            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Carpenters Water Fiji PTE Limited</span>
+                            <div style={{ marginTop: '8px', fontSize: '12px' }}>
+                              <strong>Bill To:</strong> {selectedInvoice.customer}<br />
+                              <strong>Tax ID:</strong> FJ-TIN-893240-Z
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                            <svg width="60" height="60" style={{ border: '1px solid var(--border-color)', padding: '2px', backgroundColor: '#fff', borderRadius: '4px' }} viewBox="0 0 29 29">
+                              <path d="M0 0h7v7H0zm1 1v5h5V1zm8-1h1v1H9zm1 1h1v1h-1zm-2 1h1v1H8zm3 0h1v1h-1zM9 4h1v1H9zm2 0h1v1h-1zm-3 1h1v1H8zm1 1h1v1H9zM0 9h7v7H0zm1 1v5h5v-5zm11-2h1v1h-1zm-1 2h1v1h-1zm2 1h1v1h-1zm-2 2h1v1h-1zm1 1h1v1h-1zm3-6h1v1h-1zm-1 2h1v1h-1zm2 1h1v1h-1zm-2 2h1v1h-1zm1 1h1v1h-1zm5-7h7v7h-7zm1 1v5h5v-5zm-11 8h1v1h-1zm2 0h1v1h-1zm-1 1h1v1h-1zm-2 2h1v1h-1zm3 0h1v1h-1zm1 1h1v1h-1zm-3 1h1v1h-1zm2 1h1v1h-1zm-1 1h1v1h-1zm7-7h1v1h-1zm2 0h1v1h-1zm-1 1h1v1h-1zm-2 2h1v1h-1zm3 0h1v1h-1zm1 1h1v1h-1zm-3 1h1v1h-1zm2 1h1v1h-1zm-1 1h1v1h-1zm-7 2h1v1h-1zm2 0h1v1h-1zm-1 1h1v1h-1zm5-1h1v1h-1zm2 0h1v1h-1zm-1 1h1v1h-1z" fill="#111" />
+                            </svg>
+                            <div style={{ textAlign: 'right', fontSize: '12px' }}>
+                              <h4 style={{ color: 'var(--accent)', fontWeight: '700', fontSize: '14px', margin: '0 0 4px 0' }}>{selectedInvoice.name}</h4>
+                              <span><strong>Posting Date:</strong> {selectedInvoice.posting_date}</span><br />
+                              <span><strong>Due Date:</strong> {selectedInvoice.due_date || '-'}</span><br />
+                              <span style={{ fontSize: '11px', display: 'inline-block', marginTop: '6px', padding: '3px 8px', borderRadius: '4px', backgroundColor: selectedInvoice.status === 'Paid' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)', color: selectedInvoice.status === 'Paid' ? 'var(--success)' : 'var(--danger)', fontWeight: 'bold' }}>{selectedInvoice.status}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <table className="custom-table" style={{ width: '100%', fontSize: '12px' }}>
+                          <thead>
+                            <tr style={{ backgroundColor: 'var(--border-color)' }}>
+                              <th style={{ padding: '8px' }}>Item Code</th>
+                              <th style={{ padding: '8px' }}>Item Description</th>
+                              <th style={{ padding: '8px', textAlign: 'center' }}>Qty</th>
+                              <th style={{ padding: '8px', textAlign: 'right' }}>Rate</th>
+                              <th style={{ padding: '8px', textAlign: 'right' }}>Amount</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {selectedInvoice.items?.map((item, idx) => (
+                              <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                <td style={{ padding: '8px', fontWeight: '700' }}>{item.item_code}</td>
+                                <td style={{ padding: '8px' }}>{item.item_name || 'Standard PET Water Box'}</td>
+                                <td style={{ padding: '8px', textAlign: 'center' }}>{item.qty}</td>
+                                <td style={{ padding: '8px', textAlign: 'right' }}>${Number(item.rate).toFixed(2)}</td>
+                                <td style={{ padding: '8px', textAlign: 'right', fontWeight: '700' }}>${Number(item.amount || (item.qty * item.rate)).toFixed(2)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
+                          <div style={{ flex: 1, minWidth: '240px', fontSize: '11px', fontStyle: 'italic', color: 'var(--text-muted)', borderLeft: '3px solid var(--accent)', paddingLeft: '8px', marginTop: '12px' }}>
+                            <strong>Amount in Words:</strong><br />
+                            <span style={{ color: 'var(--text-main)', fontWeight: '500' }}>{convertNumberToWords(selectedInvoice.grand_total || selectedInvoice.items?.reduce((acc, it) => acc + (it.qty * it.rate), 0) * 1.09)}</span>
+                          </div>
+                          <div style={{ width: '260px', display: 'flex', flexDirection: 'column', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '12px', fontSize: '12px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span>Net Total:</span>
+                              <strong>${Number(selectedInvoice.net_total || (selectedInvoice.grand_total - (selectedInvoice.total_taxes_and_charges || 0)) || selectedInvoice.items?.reduce((acc, it) => acc + (it.qty * it.rate), 0)).toFixed(2)}</strong>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span>VAT (9%):</span>
+                              <strong>${Number(selectedInvoice.total_taxes_and_charges || (selectedInvoice.grand_total * 0.09) || selectedInvoice.items?.reduce((acc, it) => acc + (it.qty * it.rate), 0) * 0.09).toFixed(2)}</strong>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border-color)', paddingTop: '6px', fontSize: '14px', color: 'var(--accent)' }}>
+                              <span>Grand Total:</span>
+                              <strong>${Number(selectedInvoice.grand_total || selectedInvoice.items?.reduce((acc, it) => acc + (it.qty * it.rate), 0) * 1.09).toFixed(2)}</strong>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Bank Details & Terms Footer */}
+                        <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', fontSize: '11px', display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '30px', marginTop: '10px' }}>
+                          <div>
+                            <strong style={{ color: 'var(--text-heading)', display: 'block', marginBottom: '6px', letterSpacing: '0.3px' }}>🏦 BANK PAYMENT DETAILS</strong>
+                            <span style={{ color: 'var(--text-muted)' }}>Bank Name:</span> <strong style={{ color: 'var(--text-main)' }}>Westpac Banking Fiji</strong><br />
+                            <span style={{ color: 'var(--text-muted)' }}>Account Name:</span> <strong style={{ color: 'var(--text-main)' }}>Carpenters Water Fiji PTE Limited</strong><br />
+                            <span style={{ color: 'var(--text-muted)' }}>Account Number:</span> <strong style={{ color: 'var(--text-main)' }}>9801452309</strong><br />
+                            <span style={{ color: 'var(--text-muted)' }}>BSB/SWIFT:</span> <strong style={{ color: 'var(--text-main)' }}>WPACFJ21</strong>
+                          </div>
+                          <div>
+                            <strong style={{ color: 'var(--text-heading)', display: 'block', marginBottom: '6px', letterSpacing: '0.3px' }}>📋 TERMS & CONDITIONS</strong>
+                            <span style={{ color: 'var(--text-muted)' }}>1. Payment terms are net 30 days from posting date.</span><br />
+                            <span style={{ color: 'var(--text-muted)' }}>2. Please mention Invoice number as deposit reference.</span><br />
+                            <span style={{ color: 'var(--text-muted)' }}>3. Late accounts accrue 1.5% monthly compound interest.</span>
+                          </div>
+                        </div>
+
+                        <div className="no-print" style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: 'auto' }}>
+                          <button type="button" className="secondary-btn" onClick={() => setShowAmendInvoiceModal(true)}>✏️ Amend Invoice</button>
+                          <button type="button" className="primary-btn" onClick={() => window.print()} style={{ backgroundColor: 'var(--accent)', borderColor: 'var(--accent)' }}>🖨️ Print Invoice</button>
+                        </div>
+                      </div>
+                    )
+                  ) : (
+                    !selectedDeliveryNote ? (
+                      <div style={{ display: 'flex', flex: 1, flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '40px', color: 'var(--text-muted)' }}>
+                        <span style={{ fontSize: '48px', marginBottom: '12px' }}>🚚</span>
+                        <h3>Select a Delivery Note</h3>
+                        <p style={{ fontSize: '13px' }}>Click an item on the left list to view delivery note slip.</p>
+                      </div>
+                    ) : (
+                      <div className="print-report-container" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid var(--border-color)', paddingBottom: '16px' }}>
+                          <div>
+                            <h3 style={{ fontSize: '20px', fontWeight: '800', color: 'var(--text-heading)', margin: 0 }}>DELIVERY NOTE</h3>
+                            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Carpenters Water Fiji PTE Limited</span>
+                            <div style={{ marginTop: '8px', fontSize: '12px' }}>
+                              <strong>Deliver To:</strong> {selectedDeliveryNote.customer}<br />
+                              <strong>Shipment Point:</strong> Western Depot Lautoka
+                            </div>
+                          </div>
                           <div style={{ textAlign: 'right', fontSize: '12px' }}>
-                            <h4 style={{ color: 'var(--accent)', fontWeight: '700', fontSize: '14px', margin: '0 0 4px 0' }}>{selectedInvoice.name}</h4>
-                            <span><strong>Posting Date:</strong> {selectedInvoice.posting_date}</span><br />
-                            <span><strong>Due Date:</strong> {selectedInvoice.due_date || '-'}</span><br />
-                            <span style={{ fontSize: '11px', display: 'inline-block', marginTop: '6px', padding: '3px 8px', borderRadius: '4px', backgroundColor: selectedInvoice.status === 'Paid' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)', color: selectedInvoice.status === 'Paid' ? 'var(--success)' : 'var(--danger)', fontWeight: 'bold' }}>{selectedInvoice.status}</span>
+                            <h4 style={{ color: 'var(--accent)', fontWeight: '700', fontSize: '14px', margin: '0 0 4px 0' }}>{selectedDeliveryNote.name}</h4>
+                            <span><strong>Posting Date:</strong> {selectedDeliveryNote.posting_date}</span><br />
+                            <span><strong>Posting Time:</strong> {selectedDeliveryNote.posting_time}</span><br />
+                            <span style={{ fontSize: '11px', display: 'inline-block', marginTop: '6px', padding: '3px 8px', borderRadius: '4px', backgroundColor: selectedDeliveryNote.status === 'Completed' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(245, 158, 11, 0.1)', color: selectedDeliveryNote.status === 'Completed' ? 'var(--success)' : 'var(--warning)', fontWeight: 'bold' }}>{selectedDeliveryNote.status}</span>
                           </div>
                         </div>
-                      </div>
 
-                      <table className="custom-table" style={{ width: '100%', fontSize: '12px' }}>
-                        <thead>
-                          <tr style={{ backgroundColor: 'var(--border-color)' }}>
-                            <th style={{ padding: '8px' }}>Item Code</th>
-                            <th style={{ padding: '8px' }}>Item Description</th>
-                            <th style={{ padding: '8px', textAlign: 'center' }}>Qty</th>
-                            <th style={{ padding: '8px', textAlign: 'right' }}>Rate</th>
-                            <th style={{ padding: '8px', textAlign: 'right' }}>Amount</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {selectedInvoice.items?.map((item, idx) => (
-                            <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                              <td style={{ padding: '8px', fontWeight: '700' }}>{item.item_code}</td>
-                              <td style={{ padding: '8px' }}>{item.item_name || 'Standard PET Water Box'}</td>
-                              <td style={{ padding: '8px', textAlign: 'center' }}>{item.qty}</td>
-                              <td style={{ padding: '8px', textAlign: 'right' }}>${Number(item.rate).toFixed(2)}</td>
-                              <td style={{ padding: '8px', textAlign: 'right', fontWeight: '700' }}>${Number(item.amount || (item.qty * item.rate)).toFixed(2)}</td>
+                        <table className="custom-table" style={{ width: '100%', fontSize: '12px' }}>
+                          <thead>
+                            <tr style={{ backgroundColor: 'var(--border-color)' }}>
+                              <th style={{ padding: '8px' }}>Item Code</th>
+                              <th style={{ padding: '8px' }}>Item Description</th>
+                              <th style={{ padding: '8px', textAlign: 'center' }}>Qty</th>
+                              <th style={{ padding: '8px' }}>Source Warehouse</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody>
+                            {selectedDeliveryNote.items?.map((item, idx) => (
+                              <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                <td style={{ padding: '8px', fontWeight: '700' }}>{item.item_code}</td>
+                                <td style={{ padding: '8px' }}>{item.item_name || 'Standard PET Water Box'}</td>
+                                <td style={{ padding: '8px', textAlign: 'center' }}>{item.qty}</td>
+                                <td style={{ padding: '8px' }}>{item.warehouse || 'Finished Goods - CWFL'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
 
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
-                        <div style={{ flex: 1, minWidth: '240px', fontSize: '11px', fontStyle: 'italic', color: 'var(--text-muted)', borderLeft: '3px solid var(--accent)', paddingLeft: '8px', marginTop: '12px' }}>
-                          <strong>Amount in Words:</strong><br />
-                          <span style={{ color: 'var(--text-main)', fontWeight: '500' }}>{convertNumberToWords(selectedInvoice.grand_total || selectedInvoice.items?.reduce((acc, it) => acc + (it.qty * it.rate), 0) * 1.09)}</span>
-                        </div>
-                        <div style={{ width: '260px', display: 'flex', flexDirection: 'column', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '12px', fontSize: '12px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                            <span>Net Total:</span>
-                            <strong>${Number(selectedInvoice.net_total || (selectedInvoice.grand_total - (selectedInvoice.total_taxes_and_charges || 0)) || selectedInvoice.items?.reduce((acc, it) => acc + (it.qty * it.rate), 0)).toFixed(2)}</strong>
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                            <span>VAT (9%):</span>
-                            <strong>${Number(selectedInvoice.total_taxes_and_charges || (selectedInvoice.grand_total * 0.09) || selectedInvoice.items?.reduce((acc, it) => acc + (it.qty * it.rate), 0) * 0.09).toFixed(2)}</strong>
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border-color)', paddingTop: '6px', fontSize: '14px', color: 'var(--accent)' }}>
-                            <span>Grand Total:</span>
-                            <strong>${Number(selectedInvoice.grand_total || selectedInvoice.items?.reduce((acc, it) => acc + (it.qty * it.rate), 0) * 1.09).toFixed(2)}</strong>
+                        <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                          <p><strong>Note:</strong> Goods received in good order. Please sign below upon cargo handover confirmation.</p>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', marginTop: '30px' }}>
+                            <div style={{ borderTop: '1px dashed var(--text-muted)', paddingTop: '8px', textAlign: 'center' }}>Authorized Signature (Sender)</div>
+                            <div style={{ borderTop: '1px dashed var(--text-muted)', paddingTop: '8px', textAlign: 'center' }}>Customer Signature (Receiver)</div>
                           </div>
                         </div>
-                      </div>
 
-                      {/* Bank Details & Terms Footer */}
-                      <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', fontSize: '11px', display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '30px', marginTop: '10px' }}>
-                        <div>
-                          <strong style={{ color: 'var(--text-heading)', display: 'block', marginBottom: '6px', letterSpacing: '0.3px' }}>🏦 BANK PAYMENT DETAILS</strong>
-                          <span style={{ color: 'var(--text-muted)' }}>Bank Name:</span> <strong style={{ color: 'var(--text-main)' }}>Westpac Banking Fiji</strong><br />
-                          <span style={{ color: 'var(--text-muted)' }}>Account Name:</span> <strong style={{ color: 'var(--text-main)' }}>Carpenters Water Fiji PTE Limited</strong><br />
-                          <span style={{ color: 'var(--text-muted)' }}>Account Number:</span> <strong style={{ color: 'var(--text-main)' }}>9801452309</strong><br />
-                          <span style={{ color: 'var(--text-muted)' }}>BSB/SWIFT:</span> <strong style={{ color: 'var(--text-main)' }}>WPACFJ21</strong>
-                        </div>
-                        <div>
-                          <strong style={{ color: 'var(--text-heading)', display: 'block', marginBottom: '6px', letterSpacing: '0.3px' }}>📋 TERMS & CONDITIONS</strong>
-                          <span style={{ color: 'var(--text-muted)' }}>1. Payment terms are net 30 days from posting date.</span><br />
-                          <span style={{ color: 'var(--text-muted)' }}>2. Please mention Invoice number as deposit reference.</span><br />
-                          <span style={{ color: 'var(--text-muted)' }}>3. Late accounts accrue 1.5% monthly compound interest.</span>
+                        <div className="no-print" style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: 'auto' }}>
+                          <button type="button" className="secondary-btn" onClick={() => setShowAmendDeliveryNoteModal(true)}>✏️ Amend Note</button>
+                          <button type="button" className="primary-btn" onClick={() => window.print()} style={{ backgroundColor: 'var(--accent)', borderColor: 'var(--accent)' }}>🖨️ Print Delivery Note</button>
                         </div>
                       </div>
+                    )
+                  )}
+                </div>
 
-                      <div className="no-print" style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: 'auto' }}>
-                        <button type="button" className="secondary-btn" onClick={() => setShowAmendInvoiceModal(true)}>✏️ Amend Invoice</button>
-                        <button type="button" className="primary-btn" onClick={() => window.print()} style={{ backgroundColor: 'var(--accent)', borderColor: 'var(--accent)' }}>🖨️ Print Invoice</button>
-                      </div>
-                    </div>
-                  )
-                ) : (
-                  !selectedDeliveryNote ? (
-                    <div style={{ display: 'flex', flex: 1, flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '40px', color: 'var(--text-muted)' }}>
-                      <span style={{ fontSize: '48px', marginBottom: '12px' }}>🚚</span>
-                      <h3>Select a Delivery Note</h3>
-                      <p style={{ fontSize: '13px' }}>Click an item on the left list to view delivery note slip.</p>
-                    </div>
-                  ) : (
-                    <div className="print-report-container" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid var(--border-color)', paddingBottom: '16px' }}>
-                        <div>
-                          <h3 style={{ fontSize: '20px', fontWeight: '800', color: 'var(--text-heading)', margin: 0 }}>DELIVERY NOTE</h3>
-                          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Carpenters Water Fiji PTE Limited</span>
-                          <div style={{ marginTop: '8px', fontSize: '12px' }}>
-                            <strong>Deliver To:</strong> {selectedDeliveryNote.customer}<br />
-                            <strong>Shipment Point:</strong> Western Depot Lautoka
-                          </div>
-                        </div>
-                        <div style={{ textAlign: 'right', fontSize: '12px' }}>
-                          <h4 style={{ color: 'var(--accent)', fontWeight: '700', fontSize: '14px', margin: '0 0 4px 0' }}>{selectedDeliveryNote.name}</h4>
-                          <span><strong>Posting Date:</strong> {selectedDeliveryNote.posting_date}</span><br />
-                          <span><strong>Posting Time:</strong> {selectedDeliveryNote.posting_time}</span><br />
-                          <span style={{ fontSize: '11px', display: 'inline-block', marginTop: '6px', padding: '3px 8px', borderRadius: '4px', backgroundColor: selectedDeliveryNote.status === 'Completed' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(245, 158, 11, 0.1)', color: selectedDeliveryNote.status === 'Completed' ? 'var(--success)' : 'var(--warning)', fontWeight: 'bold' }}>{selectedDeliveryNote.status}</span>
-                        </div>
-                      </div>
-
-                      <table className="custom-table" style={{ width: '100%', fontSize: '12px' }}>
-                        <thead>
-                          <tr style={{ backgroundColor: 'var(--border-color)' }}>
-                            <th style={{ padding: '8px' }}>Item Code</th>
-                            <th style={{ padding: '8px' }}>Item Description</th>
-                            <th style={{ padding: '8px', textAlign: 'center' }}>Qty</th>
-                            <th style={{ padding: '8px' }}>Source Warehouse</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {selectedDeliveryNote.items?.map((item, idx) => (
-                            <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                              <td style={{ padding: '8px', fontWeight: '700' }}>{item.item_code}</td>
-                              <td style={{ padding: '8px' }}>{item.item_name || 'Standard PET Water Box'}</td>
-                              <td style={{ padding: '8px', textAlign: 'center' }}>{item.qty}</td>
-                              <td style={{ padding: '8px' }}>{item.warehouse || 'Finished Goods - CWFL'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-
-                      <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px', fontSize: '12px', color: 'var(--text-muted)' }}>
-                        <p><strong>Note:</strong> Goods received in good order. Please sign below upon cargo handover confirmation.</p>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', marginTop: '30px' }}>
-                          <div style={{ borderTop: '1px dashed var(--text-muted)', paddingTop: '8px', textAlign: 'center' }}>Authorized Signature (Sender)</div>
-                          <div style={{ borderTop: '1px dashed var(--text-muted)', paddingTop: '8px', textAlign: 'center' }}>Customer Signature (Receiver)</div>
-                        </div>
-                      </div>
-
-                      <div className="no-print" style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: 'auto' }}>
-                        <button type="button" className="secondary-btn" onClick={() => setShowAmendDeliveryNoteModal(true)}>✏️ Amend Note</button>
-                        <button type="button" className="primary-btn" onClick={() => window.print()} style={{ backgroundColor: 'var(--accent)', borderColor: 'var(--accent)' }}>🖨️ Print Delivery Note</button>
-                      </div>
-                    </div>
-                  )
-                )}
               </div>
-
             </div>
-          </div>
-        )})()}
+          )
+        })()}
 
         {/* Maintenance Tab */}
         {currentTab === 'maintenance' && (
@@ -3840,7 +4236,7 @@ function App() {
 
             {/* Sub-Tabs selection bar for Maintenance */}
             <div style={{ display: 'flex', gap: '12px', borderBottom: '1px solid var(--border-color)', marginBottom: '20px', paddingBottom: '2px' }}>
-              <button 
+              <button
                 type="button"
                 className={`tab-btn ${activeMaintSubTab === 'preventive' ? 'active' : ''}`}
                 style={{
@@ -3857,7 +4253,7 @@ function App() {
               >
                 ⚙️ Daily Preventive Checklists
               </button>
-              <button 
+              <button
                 type="button"
                 className={`tab-btn ${activeMaintSubTab === 'regular-breakdown' ? 'active' : ''}`}
                 style={{
@@ -3881,7 +4277,7 @@ function App() {
                 {/* Main view container: Templates select list */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                   <h3 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Available Daily Preventive Checklists</h3>
-                  <button 
+                  <button
                     type="button"
                     onClick={() => setMaintViewMode(prev => prev === 'grid' ? 'list' : 'grid')}
                     className="secondary-btn"
@@ -3911,9 +4307,9 @@ function App() {
                           </div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
                             <span style={{ fontSize: '11px', fontWeight: '500' }}>Logs: {countMatched}</span>
-                            <button 
+                            <button
                               type="button"
-                              className="primary-btn" 
+                              className="primary-btn"
                               style={{ padding: '6px 12px', fontSize: '12px' }}
                               onClick={() => {
                                 const todayStr = new Date().toISOString().substring(0, 10);
@@ -3964,9 +4360,9 @@ function App() {
                               <td style={{ padding: '8px', textAlign: 'center' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
                                   <span style={{ fontSize: '12px', fontWeight: '600' }}>Logs: {countMatched}</span>
-                                  <button 
+                                  <button
                                     type="button"
-                                    className="primary-btn" 
+                                    className="primary-btn"
                                     style={{ padding: '6px 14px', fontSize: '12px' }}
                                     onClick={() => {
                                       const todayStr = new Date().toISOString().substring(0, 10);
@@ -4012,9 +4408,9 @@ function App() {
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
                     <span style={{ fontSize: '11px', fontWeight: '500' }}>Logs: {maintenanceRecords.filter(r => r.templateId === 'weight-check').length}</span>
-                    <button 
+                    <button
                       type="button"
-                      className="primary-btn" 
+                      className="primary-btn"
                       style={{ padding: '6px 12px', fontSize: '12px' }}
                       onClick={() => setActiveMaintForm('weight-check')}
                     >
@@ -4038,9 +4434,9 @@ function App() {
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
                     <span style={{ fontSize: '11px', fontWeight: '500' }}>Logs: {maintenanceRecords.filter(r => r.templateId === 'breakdown').length}</span>
-                    <button 
+                    <button
                       type="button"
-                      className="primary-btn" 
+                      className="primary-btn"
                       style={{ padding: '6px 12px', fontSize: '12px', backgroundColor: 'var(--danger)', borderColor: 'var(--danger)' }}
                       onClick={() => setActiveMaintForm('breakdown')}
                     >
@@ -4056,16 +4452,16 @@ function App() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
                 <h3 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Checklist Log History</h3>
                 <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                  <input 
-                    type="text" 
-                    placeholder="Search by Log ID, Oper., Superv. ..." 
-                    className="form-input" 
+                  <input
+                    type="text"
+                    placeholder="Search by Log ID, Oper., Superv. ..."
+                    className="form-input"
                     style={{ width: '220px', height: '34px', padding: '6px 12px', fontSize: '12px' }}
                     value={maintSearchQuery}
                     onChange={(e) => setMaintSearchQuery(e.target.value)}
                   />
-                  <select 
-                    className="form-input" 
+                  <select
+                    className="form-input"
                     style={{ width: '180px', height: '34px', padding: '6px 12px', fontSize: '12px' }}
                     value={maintFilterEquipment}
                     onChange={(e) => setMaintFilterEquipment(e.target.value)}
@@ -4127,9 +4523,9 @@ function App() {
                             </td>
                             <td style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{rec.timestamp}</td>
                             <td>
-                              <button 
+                              <button
                                 type="button"
-                                className="secondary-btn" 
+                                className="secondary-btn"
                                 style={{ padding: '4px 8px', fontSize: '11px' }}
                                 onClick={() => setViewingRecord(rec)}
                               >
@@ -4143,10 +4539,10 @@ function App() {
                   </div>
                   {/* Maintenance Pagination */}
                   <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', marginTop: '16px' }}>
-                    <button 
+                    <button
                       type="button"
-                      className="secondary-btn" 
-                      disabled={maintPage === 1} 
+                      className="secondary-btn"
+                      disabled={maintPage === 1}
                       onClick={() => setMaintPage(prev => Math.max(1, prev - 1))}
                     >
                       ◀ Previous
@@ -4154,10 +4550,10 @@ function App() {
                     <span style={{ fontSize: '13px', fontWeight: '600' }}>
                       Page {maintPage} of {Math.max(1, Math.ceil(filteredMaintRecords.length / 20))}
                     </span>
-                    <button 
+                    <button
                       type="button"
-                      className="secondary-btn" 
-                      disabled={maintPage === Math.max(1, Math.ceil(filteredMaintRecords.length / 20))} 
+                      className="secondary-btn"
+                      disabled={maintPage === Math.max(1, Math.ceil(filteredMaintRecords.length / 20))}
                       onClick={() => setMaintPage(prev => Math.min(Math.max(1, Math.ceil(filteredMaintRecords.length / 20)), prev + 1))}
                     >
                       Next ▶
@@ -4270,9 +4666,9 @@ function App() {
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
                     <span style={{ fontSize: '11px', fontWeight: '500' }}>Logs: {safetyRecords.filter(r => r.type === 'Incident Report').length}</span>
-                    <button 
+                    <button
                       type="button"
-                      className="primary-btn" 
+                      className="primary-btn"
                       style={{ padding: '6px 12px', fontSize: '12px', backgroundColor: 'var(--danger)', borderColor: 'var(--danger)' }}
                       onClick={() => setActiveSafetyForm('ohsf')}
                     >
@@ -4296,9 +4692,9 @@ function App() {
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
                     <span style={{ fontSize: '11px', fontWeight: '500' }}>Logs: {safetyRecords.filter(r => r.type === 'First Aid Log').length}</span>
-                    <button 
+                    <button
                       type="button"
-                      className="primary-btn" 
+                      className="primary-btn"
                       style={{ padding: '6px 12px', fontSize: '12px' }}
                       onClick={() => setActiveSafetyForm('first-aid')}
                     >
@@ -4322,9 +4718,9 @@ function App() {
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
                     <span style={{ fontSize: '11px', fontWeight: '500' }}>Logs: {safetyRecords.filter(r => r.type === 'Swab Test').length}</span>
-                    <button 
+                    <button
                       type="button"
-                      className="primary-btn" 
+                      className="primary-btn"
                       style={{ padding: '6px 12px', fontSize: '12px', backgroundColor: 'var(--success)', borderColor: 'var(--success)' }}
                       onClick={() => setActiveSafetyForm('swab')}
                     >
@@ -4348,9 +4744,9 @@ function App() {
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
                     <span style={{ fontSize: '11px', fontWeight: '500' }}>Logs: {safetyRecords.filter(r => r.type === 'Induction Log').length}</span>
-                    <button 
+                    <button
                       type="button"
-                      className="primary-btn" 
+                      className="primary-btn"
                       style={{ padding: '6px 12px', fontSize: '12px', backgroundColor: 'var(--accent)', borderColor: 'var(--accent)' }}
                       onClick={() => setActiveSafetyForm('induction')}
                     >
@@ -4365,16 +4761,16 @@ function App() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
                   <h3 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Health & Safety Event Register</h3>
                   <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                    <input 
-                      type="text" 
-                      placeholder="Search register logs..." 
-                      className="form-input" 
+                    <input
+                      type="text"
+                      placeholder="Search register logs..."
+                      className="form-input"
                       style={{ width: '220px', height: '34px', padding: '6px 12px', fontSize: '12px' }}
                       value={safetySearchQuery}
                       onChange={(e) => setSafetySearchQuery(e.target.value)}
                     />
-                    <select 
-                      className="form-input" 
+                    <select
+                      className="form-input"
                       style={{ width: '180px', height: '34px', padding: '6px 12px', fontSize: '12px' }}
                       value={safetyFilterType}
                       onChange={(e) => setSafetyFilterType(e.target.value)}
@@ -4412,7 +4808,7 @@ function App() {
                             let summary = '';
                             let logger = rec.operator || 'Not Signed';
                             let target = rec.injuredPerson || rec.analyst || 'N/A';
-                            
+
                             if (rec.type === 'Incident Report') {
                               summary = `Lost Time: ${rec.daysLost || 0} days - ${rec.incidentNature || 'Injury'}`;
                             } else if (rec.type === 'First Aid Log') {
@@ -4445,9 +4841,9 @@ function App() {
                                 <td>👤 {logger}</td>
                                 <td style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{rec.timestamp}</td>
                                 <td>
-                                  <button 
+                                  <button
                                     type="button"
-                                    className="secondary-btn" 
+                                    className="secondary-btn"
                                     style={{ padding: '4px 8px', fontSize: '11px' }}
                                     onClick={() => setViewingSafetyRecord(rec)}
                                   >
@@ -4462,10 +4858,10 @@ function App() {
                     </div>
                     {/* Safety Pagination */}
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', marginTop: '16px' }}>
-                      <button 
+                      <button
                         type="button"
-                        className="secondary-btn" 
-                        disabled={safetyPage === 1} 
+                        className="secondary-btn"
+                        disabled={safetyPage === 1}
                         onClick={() => setSafetyPage(prev => Math.max(1, prev - 1))}
                       >
                         ◀ Previous
@@ -4473,10 +4869,10 @@ function App() {
                       <span style={{ fontSize: '13px', fontWeight: '600' }}>
                         Page {safetyPage} of {Math.max(1, Math.ceil(filteredSafetyRecords.length / 20))}
                       </span>
-                      <button 
+                      <button
                         type="button"
-                        className="secondary-btn" 
-                        disabled={safetyPage === Math.max(1, Math.ceil(filteredSafetyRecords.length / 20))} 
+                        className="secondary-btn"
+                        disabled={safetyPage === Math.max(1, Math.ceil(filteredSafetyRecords.length / 20))}
                         onClick={() => setSafetyPage(prev => Math.min(Math.max(1, Math.ceil(filteredSafetyRecords.length / 20)), prev + 1))}
                       >
                         Next ▶
@@ -4497,40 +4893,40 @@ function App() {
                 <h2>Process Workflow</h2>
                 <p>Interactive, animated simulation of the entire end-to-end beverage production line.</p>
               </div>
-              
+
               {/* Simulation Controls */}
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center', backgroundColor: 'var(--bg-card)', padding: '10px 16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                <button 
-                  className="primary-btn" 
+                <button
+                  className="primary-btn"
                   style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}
                   onClick={() => setSimPlaying(!simPlaying)}
                 >
                   {simPlaying ? '⏸ Pause' : '▶ Play'}
                 </button>
-                <button 
-                  className="secondary-btn" 
+                <button
+                  className="secondary-btn"
                   style={{ padding: '6px 12px', fontSize: '12px' }}
                   onClick={() => { setSimPlaying(false); setSimStep(0); }}
                 >
                   🔄 Reset
                 </button>
                 <div style={{ display: 'flex', gap: '4px', marginLeft: '12px' }}>
-                  <button 
-                    className="secondary-btn" 
+                  <button
+                    className="secondary-btn"
                     style={{ padding: '4px 8px', fontSize: '10px', backgroundColor: simSpeed === 4000 ? 'var(--accent)' : '', color: simSpeed === 4000 ? '#111' : '' }}
                     onClick={() => setSimSpeed(4000)}
                   >
                     Slow
                   </button>
-                  <button 
-                    className="secondary-btn" 
+                  <button
+                    className="secondary-btn"
                     style={{ padding: '4px 8px', fontSize: '10px', backgroundColor: simSpeed === 2000 ? 'var(--accent)' : '', color: simSpeed === 2000 ? '#111' : '' }}
                     onClick={() => setSimSpeed(2000)}
                   >
                     1x
                   </button>
-                  <button 
-                    className="secondary-btn" 
+                  <button
+                    className="secondary-btn"
                     style={{ padding: '4px 8px', fontSize: '10px', backgroundColor: simSpeed === 800 ? 'var(--accent)' : '', color: simSpeed === 800 ? '#111' : '' }}
                     onClick={() => setSimSpeed(800)}
                   >
@@ -4652,7 +5048,7 @@ function App() {
                         >
                           {/* Inner glowing spotlight/halo behind active pod */}
                           {isActive && (
-                            <div 
+                            <div
                               style={{
                                 position: 'absolute',
                                 top: '5px',
@@ -4675,7 +5071,7 @@ function App() {
                           )}
 
                           {/* The 3D-styled Rounded Icon Pod */}
-                          <div 
+                          <div
                             className="workflow-node-pod"
                             style={{
                               width: '70px',
@@ -4683,10 +5079,10 @@ function App() {
                               borderRadius: '20px',
                               border: isActive ? `2.5px solid ${stage.color}` : '1px solid rgba(255, 255, 255, 0.1)',
                               backgroundColor: isActive ? `rgba(${stage.colorRgb}, 0.22)` : isPassed ? `rgba(${stage.colorRgb}, 0.08)` : 'rgba(11, 15, 26, 0.7)',
-                              boxShadow: isActive 
-                                ? `0 0 28px rgba(${stage.colorRgb}, 0.65), inset 0 1px 2px rgba(255, 255, 255, 0.3)` 
-                                : isPassed 
-                                  ? `0 0 15px rgba(${stage.colorRgb}, 0.25)` 
+                              boxShadow: isActive
+                                ? `0 0 28px rgba(${stage.colorRgb}, 0.65), inset 0 1px 2px rgba(255, 255, 255, 0.3)`
+                                : isPassed
+                                  ? `0 0 15px rgba(${stage.colorRgb}, 0.25)`
                                   : 'none',
                               display: 'flex',
                               alignItems: 'center',
@@ -4702,7 +5098,7 @@ function App() {
                           </div>
 
                           {/* Minimalist Info Label below the Pod */}
-                          <div 
+                          <div
                             className="workflow-node-label"
                             style={{
                               marginTop: '12px',
@@ -4765,7 +5161,7 @@ function App() {
             let passed = 0;
             microRecords.forEach(r => {
               if (r.type === 'Form 1 (Micro raw)') {
-                const allAbsent = r.sampleRows?.every(row => 
+                const allAbsent = r.sampleRows?.every(row =>
                   String(row.tcc).toLowerCase().includes('absent') || String(row.tcc).toLowerCase().includes('neg') ||
                   String(row.ecoli).toLowerCase().includes('absent') || String(row.ecoli).toLowerCase().includes('neg')
                 );
@@ -4792,7 +5188,7 @@ function App() {
               const rawTdsVal = Number(r.rawTds || 100);
               const prodPhVal = Number(r.prodPh || 7.2);
               const prodTdsVal = Number(r.prodTds || 120);
-              
+
               const rawPassed = rawPhVal >= 6.5 && rawPhVal <= 8.5 && rawTdsVal >= 50 && rawTdsVal <= 500;
               const prodPassed = prodPhVal >= 6.5 && prodPhVal <= 8.5 && prodTdsVal >= 50 && prodTdsVal <= 500;
               if (rawPassed && prodPassed) passed++;
@@ -4872,9 +5268,9 @@ function App() {
                     <>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', marginTop: '8px' }}>
                         <h3 style={{ fontSize: '14px', fontWeight: '700', margin: 0 }}>Available Daily Quality Checklists</h3>
-                        <button 
-                          type="button" 
-                          className="secondary-btn" 
+                        <button
+                          type="button"
+                          className="secondary-btn"
                           style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px', fontSize: '12px', fontWeight: '600' }}
                           onClick={() => setLabViewMode(prev => prev === 'grid' ? 'list' : 'grid')}
                         >
@@ -4931,16 +5327,16 @@ function App() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '12px' }}>
                   <h3 style={{ fontSize: '14px', fontWeight: '700', margin: 0 }}>Laboratory Quality Control Register</h3>
                   <div style={{ display: 'flex', gap: '8px' }}>
-                    <input 
-                      type="text" 
-                      className="form-input" 
-                      style={{ width: '220px', height: '32px', fontSize: '12px' }} 
-                      placeholder="🔍 Search log by Analyst/ID..." 
+                    <input
+                      type="text"
+                      className="form-input"
+                      style={{ width: '220px', height: '32px', fontSize: '12px' }}
+                      placeholder="🔍 Search log by Analyst/ID..."
                       value={labSearchQuery}
                       onChange={(e) => setLabSearchQuery(e.target.value)}
                     />
-                    <select 
-                      className="form-input" 
+                    <select
+                      className="form-input"
                       style={{ width: '180px', height: '32px', fontSize: '12px' }}
                       value={labFilterType}
                       onChange={(e) => setLabFilterType(e.target.value)}
@@ -4976,13 +5372,13 @@ function App() {
                           {filteredLabRecords.slice((labPage - 1) * 20, labPage * 20).map((rec) => {
                             let compliancePass = true;
                             if (rec.type === 'Form 1 (Micro raw)') {
-                              compliancePass = rec.sampleRows?.every(row => 
+                              compliancePass = rec.sampleRows?.every(row =>
                                 String(row.tcc).toLowerCase().includes('absent') && String(row.ecoli).toLowerCase().includes('absent')
                               );
                             } else if (rec.type === 'Form 11 (Micro water)') {
-                              compliancePass = rec.sampleRows?.every(row => 
-                                (!row.tcc || String(row.tcc).toLowerCase().includes('absent')) && 
-                                (!row.ecoli || String(row.ecoli).toLowerCase().includes('absent')) && 
+                              compliancePass = rec.sampleRows?.every(row =>
+                                (!row.tcc || String(row.tcc).toLowerCase().includes('absent')) &&
+                                (!row.ecoli || String(row.ecoli).toLowerCase().includes('absent')) &&
                                 Number(row.hpc1 || 0) < 100
                               );
                             } else if (rec.type === 'Form 9 (Chemical)') {
@@ -5005,9 +5401,9 @@ function App() {
                                 </td>
                                 <td style={{ padding: '10px', color: 'var(--text-muted)' }}>{rec.timestamp}</td>
                                 <td style={{ padding: '10px', textAlign: 'center' }}>
-                                  <button 
-                                    type="button" 
-                                    className="secondary-btn" 
+                                  <button
+                                    type="button"
+                                    className="secondary-btn"
                                     style={{ padding: '4px 8px', fontSize: '11px' }}
                                     onClick={() => setViewingLabRecord(rec)}
                                   >
@@ -5023,9 +5419,9 @@ function App() {
 
                     {/* Pagination controls */}
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', marginTop: '16px' }}>
-                      <button 
-                        type="button" 
-                        className="secondary-btn" 
+                      <button
+                        type="button"
+                        className="secondary-btn"
                         disabled={labPage === 1}
                         onClick={() => setLabPage(prev => Math.max(1, prev - 1))}
                       >
@@ -5034,9 +5430,9 @@ function App() {
                       <span style={{ fontSize: '12px', fontWeight: '600' }}>
                         Page {labPage} of {Math.max(1, Math.ceil(filteredLabRecords.length / 20))}
                       </span>
-                      <button 
-                        type="button" 
-                        className="secondary-btn" 
+                      <button
+                        type="button"
+                        className="secondary-btn"
                         disabled={labPage === Math.max(1, Math.ceil(filteredLabRecords.length / 20))}
                         onClick={() => setLabPage(prev => Math.min(Math.max(1, Math.ceil(filteredLabRecords.length / 20)), prev + 1))}
                       >
@@ -5052,13 +5448,13 @@ function App() {
 
         {currentTab === 'cleaning' && (() => {
           const filtered = cleaningRecords.filter(rec => {
-            const matchesSearch = 
+            const matchesSearch =
               rec.id.toLowerCase().includes(cleaningSearchQuery.toLowerCase()) ||
               rec.type.toLowerCase().includes(cleaningSearchQuery.toLowerCase()) ||
               (rec.cleaner || rec.recorded_by || rec.checked_by || rec.performed_by || '').toLowerCase().includes(cleaningSearchQuery.toLowerCase()) ||
               (rec.supervisor || '').toLowerCase().includes(cleaningSearchQuery.toLowerCase()) ||
               (rec.remarks || '').toLowerCase().includes(cleaningSearchQuery.toLowerCase());
-            
+
             const matchesType = cleaningFilterType === 'All' || rec.type === cleaningFilterType;
             return matchesSearch && matchesType;
           });
@@ -5097,15 +5493,15 @@ function App() {
                 <h3 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '12px', color: 'var(--text-heading)' }}>📋 Select Sanitation or Calibration Form</h3>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '16px' }}>
                   {CLEANING_TEMPLATES.map(tpl => (
-                    <div 
-                      key={tpl.id} 
-                      style={{ 
-                        backgroundColor: 'var(--bg-card)', 
-                        border: '1px solid var(--border-color)', 
-                        borderRadius: '12px', 
-                        padding: '16px', 
-                        display: 'flex', 
-                        flexDirection: 'column', 
+                    <div
+                      key={tpl.id}
+                      style={{
+                        backgroundColor: 'var(--bg-card)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '12px',
+                        padding: '16px',
+                        display: 'flex',
+                        flexDirection: 'column',
                         justifyContent: 'space-between',
                         gap: '12px'
                       }}
@@ -5114,8 +5510,8 @@ function App() {
                         <h4 style={{ fontSize: '13px', fontWeight: '700', margin: '0 0 4px 0', color: 'var(--text-heading)' }}>🧹 {tpl.name}</h4>
                         <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: 0 }}>{tpl.description}</p>
                       </div>
-                      <button 
-                        className="primary-btn" 
+                      <button
+                        className="primary-btn"
                         style={{ alignSelf: 'flex-start', fontSize: '11px', padding: '6px 12px' }}
                         onClick={() => setActiveCleaningForm(tpl.id)}
                       >
@@ -5130,20 +5526,20 @@ function App() {
               <div style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
                   <h3 style={{ fontSize: '14px', fontWeight: '700', margin: 0, color: 'var(--text-heading)' }}>📋 Sanitation & QC Log History</h3>
-                  
+
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                     {/* Search */}
-                    <input 
-                      type="text" 
-                      className="text-input" 
+                    <input
+                      type="text"
+                      className="text-input"
                       style={{ width: '200px', padding: '6px 12px', fontSize: '11px' }}
-                      placeholder="Search logs..." 
+                      placeholder="Search logs..."
                       value={cleaningSearchQuery}
                       onChange={e => setCleaningSearchQuery(e.target.value)}
                     />
                     {/* Filter Type */}
-                    <select 
-                      className="text-input" 
+                    <select
+                      className="text-input"
                       style={{ width: '180px', padding: '6px', fontSize: '11px' }}
                       value={cleaningFilterType}
                       onChange={e => setCleaningFilterType(e.target.value)}
@@ -5189,9 +5585,9 @@ function App() {
                                 </td>
                                 <td style={{ padding: '10px', color: 'var(--text-muted)' }}>{rec.timestamp}</td>
                                 <td style={{ padding: '10px', textAlign: 'center' }}>
-                                  <button 
-                                    type="button" 
-                                    className="secondary-btn" 
+                                  <button
+                                    type="button"
+                                    className="secondary-btn"
                                     style={{ padding: '4px 8px', fontSize: '11px' }}
                                     onClick={() => setViewingCleaningRecord(rec)}
                                   >
@@ -5207,9 +5603,9 @@ function App() {
 
                     {/* Pagination */}
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', marginTop: '16px' }}>
-                      <button 
-                        type="button" 
-                        className="secondary-btn" 
+                      <button
+                        type="button"
+                        className="secondary-btn"
                         disabled={cleaningPage === 1}
                         onClick={() => setCleaningPage(prev => Math.max(1, prev - 1))}
                       >
@@ -5218,9 +5614,9 @@ function App() {
                       <span style={{ fontSize: '12px', fontWeight: '600' }}>
                         Page {cleaningPage} of {Math.max(1, Math.ceil(filtered.length / 20))}
                       </span>
-                      <button 
-                        type="button" 
-                        className="secondary-btn" 
+                      <button
+                        type="button"
+                        className="secondary-btn"
                         disabled={cleaningPage === Math.max(1, Math.ceil(filtered.length / 20))}
                         onClick={() => setCleaningPage(prev => Math.min(Math.max(1, Math.ceil(filtered.length / 20)), prev + 1))}
                       >
@@ -5236,7 +5632,7 @@ function App() {
 
         {/* Support Helpdesk Module */}
         {currentTab === 'support' && (
-          <SupportModule 
+          <SupportModule
             tickets={tickets}
             onCreateTicket={handleCreateTicket}
             onResolveTicket={handleResolveTicket}
@@ -5299,12 +5695,12 @@ function App() {
                 </div>
 
                 {syncStatusMsg && (
-                  <div style={{ 
-                    fontSize: '12px', 
-                    fontWeight: '600', 
-                    marginTop: '12px', 
-                    padding: '8px', 
-                    borderRadius: '6px', 
+                  <div style={{
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    marginTop: '12px',
+                    padding: '8px',
+                    borderRadius: '6px',
                     backgroundColor: syncStatusMsg.startsWith('Sync error') || syncStatusMsg.startsWith('Connection failed') ? '#fef2f2' : '#f0fdf4',
                     color: syncStatusMsg.startsWith('Sync error') || syncStatusMsg.startsWith('Connection failed') ? '#ef4444' : '#10b981'
                   }}>
@@ -5399,18 +5795,18 @@ function App() {
                     <svg width="100%" height="100%" viewBox="0 0 600 200" preserveAspectRatio="none">
                       <defs>
                         <linearGradient id="flow-glow-full" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="var(--info)" stopOpacity="0.4"/>
-                          <stop offset="100%" stopColor="var(--info)" stopOpacity="0"/>
+                          <stop offset="0%" stopColor="var(--info)" stopOpacity="0.4" />
+                          <stop offset="100%" stopColor="var(--info)" stopOpacity="0" />
                         </linearGradient>
                       </defs>
-                      <path 
-                        d="M 0 160 Q 75 120 150 140 T 300 90 T 450 110 T 600 70 L 600 200 L 0 200 Z" 
+                      <path
+                        d="M 0 160 Q 75 120 150 140 T 300 90 T 450 110 T 600 70 L 600 200 L 0 200 Z"
                         fill="url(#flow-glow-full)"
                       />
-                      <path 
-                        d="M 0 160 Q 75 120 150 140 T 300 90 T 450 110 T 600 70" 
-                        fill="none" 
-                        stroke="var(--info)" 
+                      <path
+                        d="M 0 160 Q 75 120 150 140 T 300 90 T 450 110 T 600 70"
+                        fill="none"
+                        stroke="var(--info)"
                         strokeWidth="3.5"
                       />
                     </svg>
@@ -5428,11 +5824,11 @@ function App() {
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '48px', flexWrap: 'wrap' }}>
                   <svg width="180" height="180" viewBox="0 0 36 36">
                     <circle cx="18" cy="18" r="15.915" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="3" />
-                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--danger)" strokeWidth="3.2" 
+                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--danger)" strokeWidth="3.2"
                       strokeDasharray="60 40" strokeDashoffset="25" />
-                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--warning)" strokeWidth="3.2" 
+                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--warning)" strokeWidth="3.2"
                       strokeDasharray="30 70" strokeDashoffset="85" />
-                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--info)" strokeWidth="3.2" 
+                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--info)" strokeWidth="3.2"
                       strokeDasharray="10 90" strokeDashoffset="115" />
                   </svg>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', fontSize: '14px' }}>
@@ -5464,88 +5860,125 @@ function App() {
               <h3>Schedule New Production Run</h3>
               <button className="drawer-close-btn" onClick={() => setShowNewWODrawer(false)}>✕</button>
             </div>
-            
+
             <form onSubmit={handleCreateNewWO} className="drawer-content" style={{ maxHeight: 'calc(100vh - 120px)', overflowY: 'auto', paddingBottom: '20px' }}>
               <div className="form-group">
                 <label>Select Product (Item to Manufacture) *</label>
-                <select 
-                  name="productCode" 
-                  className="form-input" 
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="Search item code or name..."
+                  value={woProductSearch}
+                  onChange={(e) => setWoProductSearch(e.target.value)}
+                  disabled={woItemsLoading}
+                  style={{ marginBottom: '8px' }}
+                />
+                <select
+                  name="productCode"
+                  className="form-input"
                   value={selectedWoProduct}
                   onChange={(e) => setSelectedWoProduct(e.target.value)}
+                  disabled={woItemsLoading || filteredWoProductsList.length === 0}
                   required
                 >
-                  {woProductsList.map(p => (
-                    <option key={p.code} value={p.code}>{p.name} ({p.code})</option>
-                  ))}
+                  {woItemsLoading ? (
+                    <option value="">Loading items...</option>
+                  ) : filteredWoProductsList.length === 0 ? (
+                    <option value="">No manufacturable items found</option>
+                  ) : (
+                    filteredWoProductsList.map(p => (
+                      <option key={p.code} value={p.code}>{p.name} ({p.code})</option>
+                    ))
+                  )}
                 </select>
+                <small className="text-muted" style={{ fontSize: '11px' }}>
+                  Live mode shows Items that have an active submitted BOM.
+                </small>
               </div>
 
               <div className="form-group">
                 <label>BOM No *</label>
-                <select 
-                  name="bomNo" 
-                  className="form-input" 
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="Search BOM..."
+                  value={woBomSearch}
+                  onChange={(e) => setWoBomSearch(e.target.value)}
+                  disabled={woBomsLoading || !selectedWoProduct}
+                  style={{ marginBottom: '8px' }}
+                />
+                <select
+                  name="bomNo"
+                  className="form-input"
                   value={selectedWoBom}
                   onChange={(e) => setSelectedWoBom(e.target.value)}
+                  disabled={woBomsLoading || filteredWoBomsList.length === 0}
                   required
                 >
-                  {woBomsList.map(bom => (
-                    <option key={bom.id} value={bom.name}>{bom.name}</option>
-                  ))}
+                  {woBomsLoading ? (
+                    <option value="">Loading BOMs...</option>
+                  ) : filteredWoBomsList.length === 0 ? (
+                    <option value="">No active submitted BOM for selected item</option>
+                  ) : (
+                    filteredWoBomsList.map(bom => (
+                      <option key={bom.id} value={bom.name}>
+                        {bom.name}{bom.isDefault ? ' • Default' : ''}
+                      </option>
+                    ))
+                  )}
                 </select>
               </div>
 
               <div className="form-group">
                 <label>Batch Size (Qty to Manufacture) *</label>
-                <input 
-                  type="number" 
-                  name="quantity" 
-                  className="form-input" 
-                  defaultValue="1" 
-                  min="1" 
-                  required 
+                <input
+                  type="number"
+                  name="quantity"
+                  className="form-input"
+                  defaultValue="1"
+                  min="1"
+                  required
                 />
               </div>
 
               <div className="form-group">
                 <label>Company *</label>
-                <input 
-                  type="text" 
-                  name="company" 
-                  className="form-input" 
-                  defaultValue="Anantdv (Demo)" 
-                  required 
+                <input
+                  type="text"
+                  name="company"
+                  className="form-input"
+                  defaultValue="Anantdv (Demo)"
+                  required
                 />
               </div>
 
               <div className="form-group">
                 <label>Source Warehouse</label>
-                <input 
-                  type="text" 
-                  name="sourceWarehouse" 
-                  className="form-input" 
-                  defaultValue="Stores - AD" 
+                <input
+                  type="text"
+                  name="sourceWarehouse"
+                  className="form-input"
+                  defaultValue="Stores - AD"
                 />
               </div>
 
               <div className="form-group">
                 <label>Target Warehouse (Finished Goods)</label>
-                <input 
-                  type="text" 
-                  name="fgWarehouse" 
-                  className="form-input" 
-                  defaultValue="Finished Goods - AD" 
+                <input
+                  type="text"
+                  name="fgWarehouse"
+                  className="form-input"
+                  defaultValue="Finished Goods - AD"
                 />
               </div>
 
               <div className="form-group">
                 <label>Work-in-Progress Warehouse *</label>
-                <input 
-                  type="text" 
-                  name="wipWarehouse" 
-                  className="form-input" 
-                  defaultValue="Work In Progress - AD" 
+                <input
+                  type="text"
+                  name="wipWarehouse"
+                  className="form-input"
+                  defaultValue="Work In Progress - AD"
                   required
                 />
               </div>
@@ -5560,11 +5993,11 @@ function App() {
 
               <div className="form-group">
                 <label>Planned Start Time *</label>
-                <input 
-                  type="datetime-local" 
-                  name="plannedStart" 
+                <input
+                  type="datetime-local"
+                  name="plannedStart"
                   className="form-input"
-                  defaultValue="2026-06-02T23:30:00" 
+                  defaultValue="2026-06-02T23:30:00"
                   required
                 />
               </div>
@@ -5600,7 +6033,7 @@ function App() {
               <p style={{ fontSize: '13px', margin: '0 0 16px 0', color: 'var(--text-muted)' }}>
                 Logging updates for operation **{activeJCOp.operation}**. This status change updates Central ERPNext instantly.
               </p>
-              
+
               {activeJCOp.action === 'finish' && activeJCOp.operation === 'Mixing' && (
                 <div style={{ padding: '10px', backgroundColor: 'rgba(59, 130, 246, 0.1)', borderRadius: '6px', fontSize: '12px', color: 'var(--info)', marginBottom: '16px', fontWeight: '500' }}>
                   ℹ️ **Mixing Phase**: Raw materials recipe (Water, Sugar, CO2, Concentrate) will be deducted from warehouse inventory.
@@ -5615,11 +6048,11 @@ function App() {
 
               <div className="form-group" style={{ position: 'relative' }}>
                 <label>Operator Name</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  value={operatorName} 
-                  onChange={(e) => handleSearchEmployees(e.target.value, 'pauseModal')} 
+                <input
+                  type="text"
+                  className="form-input"
+                  value={operatorName}
+                  onChange={(e) => handleSearchEmployees(e.target.value, 'pauseModal')}
                   onFocus={() => {
                     setActiveSearchField('pauseModal');
                     if (operatorName.trim().length >= 3 || employeeList.length > 0) {
@@ -5645,8 +6078,8 @@ function App() {
                     boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
                   }}>
                     {employeeList.map((emp) => (
-                      <div 
-                        key={emp.name} 
+                      <div
+                        key={emp.name}
                         style={{
                           padding: '8px 12px',
                           cursor: 'pointer',
@@ -5670,34 +6103,34 @@ function App() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
                 <div>
                   <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Actual Start Time</label>
-                  <input 
-                    type="datetime-local" 
-                    className="form-input" 
-                    value={jcActualStartTime} 
-                    onChange={(e) => setJcActualStartTime(e.target.value)} 
+                  <input
+                    type="datetime-local"
+                    className="form-input"
+                    value={jcActualStartTime}
+                    onChange={(e) => setJcActualStartTime(e.target.value)}
                   />
                 </div>
                 <div>
                   <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Actual End Time</label>
-                  <input 
-                    type="datetime-local" 
-                    className="form-input" 
-                    value={jcActualEndTime} 
-                    onChange={(e) => setJcActualEndTime(e.target.value)} 
+                  <input
+                    type="datetime-local"
+                    className="form-input"
+                    value={jcActualEndTime}
+                    onChange={(e) => setJcActualEndTime(e.target.value)}
                   />
                 </div>
               </div>
 
               <div className="form-group">
                 <label>Observation Notes / Remarks</label>
-                <textarea 
-                  className="form-input" 
+                <textarea
+                  className="form-input"
                   style={{ minHeight: '80px', fontFamily: 'inherit' }}
-                  value={operatorRemarks} 
-                  onChange={(e) => setOperatorRemarks(e.target.value)} 
+                  value={operatorRemarks}
+                  onChange={(e) => setOperatorRemarks(e.target.value)}
                   placeholder={
-                    activeJCOp.action === 'pause' 
-                      ? "Enter reason for pause (e.g. mechanical calibration needed, shift change)..." 
+                    activeJCOp.action === 'pause'
+                      ? "Enter reason for pause (e.g. mechanical calibration needed, shift change)..."
                       : "Enter details (e.g. pH check 3.2, seal checks normal)..."
                   }
                   required
@@ -5706,9 +6139,9 @@ function App() {
             </div>
             <div className="modal-footer">
               <button type="button" className="secondary-btn" onClick={() => setActiveJCOp(null)}>Cancel</button>
-              <button 
-                type="button" 
-                className="primary-btn" 
+              <button
+                type="button"
+                className="primary-btn"
                 onClick={() => {
                   if (activeJCOp.action === 'pause') {
                     handlePauseJobCard(activeJCOp.woId, activeJCOp.jcId, operatorName, operatorRemarks);
@@ -5731,7 +6164,7 @@ function App() {
         const liveWO = workOrders.find(w => w.id === activeTimelineJC.woId);
         const liveJC = liveWO?.jobCards?.find(j => j.id === activeTimelineJC.jcId);
         const remarksList = liveJC?.remarksList || [];
-        
+
         return (
           <div className="modal-backdrop" onClick={() => { setActiveTimelineJC(null); setReplyingToIdx(null); setReplyText(''); }}>
             <div className="modal-panel" onClick={(e) => e.stopPropagation()} style={{ width: '560px' }}>
@@ -5740,7 +6173,7 @@ function App() {
                 <button style={{ background: 'none', border: 'none', cursor: 'pointer' }} onClick={() => { setActiveTimelineJC(null); setReplyingToIdx(null); setReplyText(''); }}>✕</button>
               </div>
               <div className="modal-content" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                
+
                 {/* Timeline display */}
                 <div style={{ maxHeight: '240px', overflowY: 'auto', padding: '4px', borderBottom: '1px solid var(--border-color)', marginBottom: '8px' }}>
                   {remarksList.length === 0 ? (
@@ -5751,19 +6184,19 @@ function App() {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', position: 'relative', paddingLeft: '20px', borderLeft: '2px solid var(--border-color)', margin: '8px 0 8px 10px' }}>
                       {remarksList.map((log, index) => (
                         <div key={index} style={{ position: 'relative' }}>
-                          <div style={{ 
-                            position: 'absolute', 
-                            left: '-26px', 
-                            top: '2px', 
-                            width: '10px', 
-                            height: '10px', 
-                            borderRadius: '50%', 
+                          <div style={{
+                            position: 'absolute',
+                            left: '-26px',
+                            top: '2px',
+                            width: '10px',
+                            height: '10px',
+                            borderRadius: '50%',
                             backgroundColor: 'var(--accent)',
-                            border: '2px solid white' 
+                            border: '2px solid white'
                           }}></div>
                           <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '2px', fontWeight: '500', display: 'flex', alignItems: 'center' }}>
                             ⏱️ {log.timestamp} • 👤 {log.operator}
-                            <button 
+                            <button
                               style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '10px', marginLeft: '12px', textDecoration: 'underline', padding: '0' }}
                               onClick={() => {
                                 setReplyingToIdx(replyingToIdx === index ? null : index);
@@ -5773,10 +6206,10 @@ function App() {
                               {replyingToIdx === index ? 'Cancel Reply' : 'Reply'}
                             </button>
                           </div>
-                          <div style={{ 
-                            fontSize: '13px', 
-                            backgroundColor: '#f3f4f6', 
-                            padding: '8px 12px', 
+                          <div style={{
+                            fontSize: '13px',
+                            backgroundColor: '#f3f4f6',
+                            padding: '8px 12px',
                             borderRadius: '8px',
                             color: 'var(--text-heading)',
                             fontWeight: '500'
@@ -5799,10 +6232,10 @@ function App() {
                                   <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px' }}>
                                     ⏱️ {reply.timestamp} • 👤 {reply.operator}
                                   </div>
-                                  <div style={{ 
-                                    fontSize: '12px', 
-                                    backgroundColor: '#eef2f6', 
-                                    padding: '6px 10px', 
+                                  <div style={{
+                                    fontSize: '12px',
+                                    backgroundColor: '#eef2f6',
+                                    padding: '6px 10px',
                                     borderRadius: '6px',
                                     color: 'var(--text-heading)'
                                   }}>
@@ -5818,17 +6251,17 @@ function App() {
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginLeft: '16px', marginTop: '8px', padding: '8px', backgroundColor: 'rgba(251, 191, 36, 0.05)', borderRadius: '6px', border: '1px solid rgba(251, 191, 36, 0.2)' }}>
                               <span style={{ fontSize: '11px', fontWeight: '600' }}>Replying as operator: {operatorName || currentUser}</span>
                               <div style={{ display: 'flex', gap: '8px' }}>
-                                <input 
-                                  type="text" 
-                                  className="form-input" 
+                                <input
+                                  type="text"
+                                  className="form-input"
                                   style={{ padding: '6px', fontSize: '12px', flex: 1 }}
-                                  value={replyText} 
-                                  onChange={(e) => setReplyText(e.target.value)} 
+                                  value={replyText}
+                                  onChange={(e) => setReplyText(e.target.value)}
                                   placeholder="Type your reply comment..."
                                 />
-                                <button 
-                                  type="button" 
-                                  className="primary-btn" 
+                                <button
+                                  type="button"
+                                  className="primary-btn"
                                   style={{ padding: '6px 12px', fontSize: '11px' }}
                                   onClick={() => {
                                     if (!replyText.trim()) return;
@@ -5854,11 +6287,11 @@ function App() {
                   <div style={{ display: 'flex', gap: '12px' }}>
                     <div style={{ flex: 1, position: 'relative' }}>
                       <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Operator</label>
-                      <input 
-                        type="text" 
-                        className="form-input" 
-                        value={operatorName} 
-                        onChange={(e) => handleSearchEmployees(e.target.value, 'remarksModal')} 
+                      <input
+                        type="text"
+                        className="form-input"
+                        value={operatorName}
+                        onChange={(e) => handleSearchEmployees(e.target.value, 'remarksModal')}
                         onFocus={() => {
                           setActiveSearchField('remarksModal');
                           if (operatorName.trim().length >= 3 || employeeList.length > 0) {
@@ -5884,8 +6317,8 @@ function App() {
                           boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
                         }}>
                           {employeeList.map((emp) => (
-                            <div 
-                              key={emp.name} 
+                            <div
+                              key={emp.name}
                               style={{
                                 padding: '6px 10px',
                                 cursor: 'pointer',
@@ -5909,32 +6342,32 @@ function App() {
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
                     <div>
                       <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Actual Start Time</label>
-                      <input 
-                        type="datetime-local" 
-                        className="form-input" 
+                      <input
+                        type="datetime-local"
+                        className="form-input"
                         style={{ padding: '6px', fontSize: '12px' }}
-                        value={jcActualStartTime} 
-                        onChange={(e) => setJcActualStartTime(e.target.value)} 
+                        value={jcActualStartTime}
+                        onChange={(e) => setJcActualStartTime(e.target.value)}
                       />
                     </div>
                     <div>
                       <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Actual End Time</label>
-                      <input 
-                        type="datetime-local" 
-                        className="form-input" 
+                      <input
+                        type="datetime-local"
+                        className="form-input"
                         style={{ padding: '6px', fontSize: '12px' }}
-                        value={jcActualEndTime} 
-                        onChange={(e) => setJcActualEndTime(e.target.value)} 
+                        value={jcActualEndTime}
+                        onChange={(e) => setJcActualEndTime(e.target.value)}
                       />
                     </div>
                   </div>
                   <div>
                     <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Observation Notes</label>
-                    <textarea 
-                      className="form-input" 
+                    <textarea
+                      className="form-input"
                       style={{ minHeight: '60px', fontFamily: 'inherit', padding: '8px', fontSize: '12px' }}
-                      value={operatorRemarks} 
-                      onChange={(e) => setOperatorRemarks(e.target.value)} 
+                      value={operatorRemarks}
+                      onChange={(e) => setOperatorRemarks(e.target.value)}
                       placeholder="Type remark message..."
                     />
                   </div>
@@ -5943,9 +6376,9 @@ function App() {
               </div>
               <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' }}>
                 <button type="button" className="secondary-btn" onClick={() => { setActiveTimelineJC(null); setReplyingToIdx(null); setReplyText(''); }}>Close</button>
-                <button 
-                  type="button" 
-                  className="primary-btn" 
+                <button
+                  type="button"
+                  className="primary-btn"
                   onClick={() => {
                     if (!operatorRemarks.trim()) return;
                     handleAddRemarkJobCard(activeTimelineJC.woId, activeTimelineJC.jcId, operatorName, operatorRemarks);
@@ -5972,9 +6405,9 @@ function App() {
               <div className="modal-content">
                 <div className="form-group">
                   <label>Select Catalog Item</label>
-                  <select 
-                    className="form-input" 
-                    value={adjustItemCode} 
+                  <select
+                    className="form-input"
+                    value={adjustItemCode}
                     onChange={(e) => setAdjustItemCode(e.target.value)}
                   >
                     {Object.keys(inventory).map(code => (
@@ -5985,10 +6418,10 @@ function App() {
 
                 <div className="form-group">
                   <label>Quantity to Add/Subtract</label>
-                  <input 
-                    type="number" 
-                    className="form-input" 
-                    value={adjustQty} 
+                  <input
+                    type="number"
+                    className="form-input"
+                    value={adjustQty}
                     onChange={(e) => setAdjustQty(parseInt(e.target.value, 10))}
                     placeholder="Enter positive to add, negative to deduct..."
                     required
@@ -6010,7 +6443,7 @@ function App() {
       {/* Modal: Log Weight Check (Form 88) */}
       {activeMaintForm === 'weight-check' && (() => {
         return (
-          <MaintWeightCheckModal 
+          <MaintWeightCheckModal
             onClose={() => setActiveMaintForm(null)}
             onSubmit={(data) => handleSaveMaintForm('weight-check', data)}
             employeeList={employeeList}
@@ -6025,7 +6458,7 @@ function App() {
       {/* Modal: Log Machine Breakdown */}
       {activeMaintForm === 'breakdown' && (() => {
         return (
-          <MaintBreakdownModal 
+          <MaintBreakdownModal
             onClose={() => setActiveMaintForm(null)}
             onSubmit={(data) => handleSaveMaintForm('breakdown', data)}
             employeeList={employeeList}
@@ -6052,7 +6485,7 @@ function App() {
               </div>
               <form onSubmit={handleSaveMaintenance}>
                 <div className="modal-content" style={{ maxHeight: '75vh', overflowY: 'auto' }}>
-                  
+
                   {/* Top metadata input */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '20px', borderBottom: '1px solid var(--border-color)', paddingBottom: '16px' }}>
                     <div>
@@ -6065,36 +6498,36 @@ function App() {
                     </div>
                     <div>
                       <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>WEEK NO</label>
-                      <input 
-                        type="text" 
-                        className="form-input" 
-                        value={maintWeekNo} 
+                      <input
+                        type="text"
+                        className="form-input"
+                        value={maintWeekNo}
                         disabled
                         style={{ backgroundColor: '#f3f4f6' }}
-                        required 
+                        required
                       />
                     </div>
                     <div style={{ display: 'flex', gap: '8px' }}>
                       <div style={{ flex: 1 }}>
                         <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>From</label>
-                        <input 
-                          type="date" 
-                          className="form-input" 
-                          value={maintFromDate} 
+                        <input
+                          type="date"
+                          className="form-input"
+                          value={maintFromDate}
                           disabled
                           style={{ backgroundColor: '#f3f4f6' }}
-                          required 
+                          required
                         />
                       </div>
                       <div style={{ flex: 1 }}>
                         <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>To</label>
-                        <input 
-                          type="date" 
-                          className="form-input" 
-                          value={maintToDate} 
+                        <input
+                          type="date"
+                          className="form-input"
+                          value={maintToDate}
                           disabled
                           style={{ backgroundColor: '#f3f4f6' }}
-                          required 
+                          required
                         />
                       </div>
                     </div>
@@ -6119,8 +6552,8 @@ function App() {
                             <td style={{ padding: '6px', fontWeight: '500' }}>{task.desc}</td>
                             <td style={{ textAlign: 'center', padding: '6px', color: 'var(--text-muted)' }}>{task.std}</td>
                             <td style={{ textAlign: 'center', padding: '4px' }}>
-                              <input 
-                                type="checkbox" 
+                              <input
+                                type="checkbox"
                                 checked={!!maintCheckgrid[tIdx]}
                                 onChange={(e) => {
                                   setMaintCheckgrid(prev => ({
@@ -6132,9 +6565,9 @@ function App() {
                               />
                             </td>
                             <td style={{ padding: '4px' }}>
-                              <input 
-                                type="text" 
-                                className="form-input" 
+                              <input
+                                type="text"
+                                className="form-input"
                                 placeholder="Remarks/Observations"
                                 style={{ padding: '4px 8px', fontSize: '11px', height: '28px' }}
                                 value={maintRemarks[tIdx] || ''}
@@ -6154,11 +6587,11 @@ function App() {
 
                   <div className="form-group" style={{ marginBottom: '16px' }}>
                     <label style={{ fontSize: '11px', fontWeight: '600' }}>Overall Comments / Remarks</label>
-                    <textarea 
-                      className="form-input" 
-                      style={{ minHeight: '50px', padding: '6px' }} 
-                      value={maintOverallComments} 
-                      onChange={e => setMaintOverallComments(e.target.value)} 
+                    <textarea
+                      className="form-input"
+                      style={{ minHeight: '50px', padding: '6px' }}
+                      value={maintOverallComments}
+                      onChange={e => setMaintOverallComments(e.target.value)}
                       placeholder="Enter overall comments or observations about this maintenance run..."
                     />
                   </div>
@@ -6167,11 +6600,11 @@ function App() {
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
                     <div style={{ position: 'relative' }}>
                       <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Sign. Of the Operator</label>
-                      <input 
-                        type="text" 
-                        className="form-input" 
-                        value={maintOperator} 
-                        onChange={(e) => handleSearchEmployees(e.target.value, 'maintOperator')} 
+                      <input
+                        type="text"
+                        className="form-input"
+                        value={maintOperator}
+                        onChange={(e) => handleSearchEmployees(e.target.value, 'maintOperator')}
                         onFocus={() => {
                           setActiveSearchField('maintOperator');
                           if (maintOperator.trim().length >= 3 || employeeList.length > 0) {
@@ -6197,8 +6630,8 @@ function App() {
                           boxShadow: '0 -4px 6px -1px rgba(0, 0, 0, 0.1)'
                         }}>
                           {employeeList.map((emp) => (
-                            <div 
-                              key={emp.name} 
+                            <div
+                              key={emp.name}
                               style={{
                                 padding: '6px 10px',
                                 cursor: 'pointer',
@@ -6221,11 +6654,11 @@ function App() {
 
                     <div style={{ position: 'relative' }}>
                       <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Sign. Of the Supervisor</label>
-                      <input 
-                        type="text" 
-                        className="form-input" 
-                        value={maintSupervisor} 
-                        onChange={(e) => handleSearchEmployees(e.target.value, 'maintSupervisor')} 
+                      <input
+                        type="text"
+                        className="form-input"
+                        value={maintSupervisor}
+                        onChange={(e) => handleSearchEmployees(e.target.value, 'maintSupervisor')}
                         onFocus={() => {
                           setActiveSearchField('maintSupervisor');
                           if (maintSupervisor.trim().length >= 3 || employeeList.length > 0) {
@@ -6251,8 +6684,8 @@ function App() {
                           boxShadow: '0 -4px 6px -1px rgba(0, 0, 0, 0.1)'
                         }}>
                           {employeeList.map((emp) => (
-                            <div 
-                              key={emp.name} 
+                            <div
+                              key={emp.name}
                               style={{
                                 padding: '6px 10px',
                                 cursor: 'pointer',
@@ -6371,7 +6804,7 @@ function App() {
                   <button className="no-print" style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px' }} onClick={() => setViewingRecord(null)}>✕</button>
                 </div>
                 <div className="modal-content" style={{ maxHeight: '75vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', fontSize: '12px' }}>
-                  
+
                   <div style={{ border: '1px solid var(--border-color)', padding: '12px', borderRadius: '8px' }}>
                     <h4 style={{ color: 'var(--accent)', marginBottom: '8px', fontWeight: '700' }}>Section 1: Request Details</h4>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
@@ -6427,7 +6860,7 @@ function App() {
                 <button className="no-print" style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px' }} onClick={() => setViewingRecord(null)}>✕</button>
               </div>
               <div className="modal-content" style={{ maxHeight: '75vh', overflowY: 'auto' }}>
-                
+
                 {/* Top metadata */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '20px', borderBottom: '1px solid var(--border-color)', paddingBottom: '16px' }}>
                   <div>
@@ -6545,7 +6978,7 @@ function App() {
 
       {/* Modal: Cleaning & Sanitation Form */}
       {activeCleaningForm && (
-        <CleaningFormModal 
+        <CleaningFormModal
           templateId={activeCleaningForm}
           onClose={() => setActiveCleaningForm(null)}
           onSubmit={(data) => handleSaveCleaning(CLEANING_TEMPLATES.find(t => t.id === activeCleaningForm).doctype, data)}
@@ -6560,7 +6993,7 @@ function App() {
 
       {/* Modal: View Cleaning & Sanitation Report Details */}
       {viewingCleaningRecord && (
-        <CleaningRecordDetailModal 
+        <CleaningRecordDetailModal
           record={viewingCleaningRecord}
           onClose={() => setViewingCleaningRecord(null)}
         />
@@ -6569,7 +7002,7 @@ function App() {
       {/* Modal: Log Accident (OHSF 1 & 2) */}
       {activeSafetyForm === 'ohsf' && (() => {
         return (
-          <SafetyIncidentFormModal 
+          <SafetyIncidentFormModal
             onClose={() => setActiveSafetyForm(null)}
             onSubmit={(data) => handleSaveSafety('Incident Report', data)}
             employeeList={employeeList}
@@ -6585,7 +7018,7 @@ function App() {
       {/* Modal: First Aid Log (Form 17) */}
       {activeSafetyForm === 'first-aid' && (() => {
         return (
-          <SafetyFirstAidFormModal 
+          <SafetyFirstAidFormModal
             onClose={() => setActiveSafetyForm(null)}
             onSubmit={(data) => handleSaveSafety('First Aid Log', data)}
             employeeList={employeeList}
@@ -6601,7 +7034,7 @@ function App() {
       {/* Modal: Environmental Swab Test (Form 14) */}
       {activeSafetyForm === 'swab' && (() => {
         return (
-          <SafetySwabFormModal 
+          <SafetySwabFormModal
             onClose={() => setActiveSafetyForm(null)}
             onSubmit={(data) => handleSaveSafety('Swab Test', data)}
           />
@@ -6611,7 +7044,7 @@ function App() {
       {/* Modal: OHS Induction Form (Form 37) */}
       {activeSafetyForm === 'induction' && (() => {
         return (
-          <SafetyForm37Modal 
+          <SafetyForm37Modal
             onClose={() => setActiveSafetyForm(null)}
             onSubmit={(data) => handleSaveSafety('Induction Log', data)}
             employeeList={employeeList}
@@ -6626,7 +7059,7 @@ function App() {
       {/* Modal: View Safety Report Details */}
       {viewingSafetyRecord && (() => {
         return (
-          <SafetyReportViewerModal 
+          <SafetyReportViewerModal
             record={viewingSafetyRecord}
             onClose={() => setViewingSafetyRecord(null)}
           />
@@ -6635,7 +7068,7 @@ function App() {
 
       {/* Modal: Laboratory Form 1 */}
       {activeLabForm === 'form1' && (
-        <LabForm1Modal 
+        <LabForm1Modal
           onClose={() => setActiveLabForm(null)}
           onSubmit={(data) => handleSaveLaboratory('Form 1 (Micro raw)', data)}
           employeeList={employeeList}
@@ -6648,7 +7081,7 @@ function App() {
 
       {/* Modal: Laboratory Form 9 */}
       {activeLabForm === 'form9' && (
-        <LabForm9Modal 
+        <LabForm9Modal
           onClose={() => setActiveLabForm(null)}
           onSubmit={(data) => handleSaveLaboratory('Form 9 (Chemical)', data)}
           employeeList={employeeList}
@@ -6661,7 +7094,7 @@ function App() {
 
       {/* Modal: Laboratory Form 11 */}
       {activeLabForm === 'form11' && (
-        <LabForm11Modal 
+        <LabForm11Modal
           onClose={() => setActiveLabForm(null)}
           onSubmit={(data) => handleSaveLaboratory('Form 11 (Micro water)', data)}
           employeeList={employeeList}
@@ -6674,7 +7107,7 @@ function App() {
 
       {/* Modal: Laboratory Form 21 */}
       {activeLabForm === 'form21' && (
-        <LabForm21Modal 
+        <LabForm21Modal
           onClose={() => setActiveLabForm(null)}
           onSubmit={(data) => handleSaveLaboratory('Form 21 (Taste/Visual)', data)}
           employeeList={employeeList}
@@ -6687,7 +7120,7 @@ function App() {
 
       {/* Modal: Laboratory Form 36 */}
       {activeLabForm === 'form36' && (
-        <LabForm36Modal 
+        <LabForm36Modal
           onClose={() => setActiveLabForm(null)}
           onSubmit={(data) => handleSaveLaboratory('Form 36 (Bourbon/Cola)', data)}
           employeeList={employeeList}
@@ -6700,7 +7133,7 @@ function App() {
 
       {/* Modal: Laboratory Form 100 */}
       {activeLabForm === 'form100' && (
-        <LabForm100Modal 
+        <LabForm100Modal
           onClose={() => setActiveLabForm(null)}
           onSubmit={(data) => handleSaveLaboratory('Form 100 (Production Log)', data)}
           employeeList={employeeList}
@@ -6710,9 +7143,9 @@ function App() {
           activeSearchField={activeSearchField}
         />
       )}
-{/* Modal: Laboratory Form 103 */}
+      {/* Modal: Laboratory Form 103 */}
       {activeLabForm === 'form103' && (
-        <LabForm103Modal 
+        <LabForm103Modal
           onClose={() => setActiveLabForm(null)}
           onSubmit={(data) => handleSaveLaboratory('Form 103 (Silver Log)', data)}
           employeeList={employeeList}
@@ -6725,7 +7158,7 @@ function App() {
 
       {/* Modal: View Laboratory Report Details */}
       {viewingLabRecord && (
-        <LabReportViewerModal 
+        <LabReportViewerModal
           record={viewingLabRecord}
           onClose={() => setViewingLabRecord(null)}
         />
@@ -6737,10 +7170,10 @@ function App() {
         <div className="modal-backdrop" style={{ zIndex: 1100 }} onClick={() => { setActiveSeSourceRow(null); setActiveSeTargetRow(null); }}>
           <div className="modal-panel" style={{ maxWidth: '850px', width: '95%' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3 className="modal-title">New Stock Entry (Material Transfer for Manufacture)</h3>
+              <h3 className="modal-title">{stockEntryModal.stockEntryName ? `Edit Stock Entry Draft: ${stockEntryModal.stockEntryName}` : 'New Stock Entry (Material Transfer for Manufacture)'}</h3>
               <button className="close-btn" onClick={() => setStockEntryModal(null)}>✕</button>
             </div>
-            
+
             <form onSubmit={(e) => {
               e.preventDefault();
               handleConfirmStockEntry(stockEntryModal);
@@ -6761,32 +7194,32 @@ function App() {
                   </div>
                   <div>
                     <label className="input-label">Company *</label>
-                    <input 
-                      type="text" 
-                      className="text-input" 
-                      value={stockEntryModal.company} 
-                      onChange={(e) => setStockEntryModal(prev => ({ ...prev, company: e.target.value }))} 
-                      required 
+                    <input
+                      type="text"
+                      className="text-input"
+                      value={stockEntryModal.company}
+                      onChange={(e) => setStockEntryModal(prev => ({ ...prev, company: e.target.value }))}
+                      required
                     />
                   </div>
                   <div>
                     <label className="input-label">Posting Date *</label>
-                    <input 
-                      type="date" 
-                      className="text-input" 
-                      value={stockEntryModal.postingDate} 
+                    <input
+                      type="date"
+                      className="text-input"
+                      value={stockEntryModal.postingDate}
                       onChange={(e) => setStockEntryModal(prev => ({ ...prev, postingDate: e.target.value }))}
-                      required 
+                      required
                     />
                   </div>
                   <div>
                     <label className="input-label">Posting Time *</label>
-                    <input 
-                      type="time" 
-                      className="text-input" 
-                      value={stockEntryModal.postingTime} 
+                    <input
+                      type="time"
+                      className="text-input"
+                      value={stockEntryModal.postingTime}
                       onChange={(e) => setStockEntryModal(prev => ({ ...prev, postingTime: e.target.value }))}
-                      required 
+                      required
                     />
                   </div>
                 </div>
@@ -6807,11 +7240,11 @@ function App() {
                       {stockEntryModal.items.map((item, idx) => (
                         <tr key={item.code} style={{ borderBottom: '1px solid var(--border-color)' }}>
                           <td style={{ position: 'relative', minWidth: '180px' }}>
-                            <input 
-                              type="text" 
-                              className="text-input" 
-                              style={{ padding: '4px 8px', fontSize: '13px' }} 
-                              value={seSourceSearch[idx] !== undefined ? seSourceSearch[idx] : item.sourceWarehouse} 
+                            <input
+                              type="text"
+                              className="text-input"
+                              style={{ padding: '4px 8px', fontSize: '13px' }}
+                              value={seSourceSearch[idx] !== undefined ? seSourceSearch[idx] : item.sourceWarehouse}
                               onChange={(e) => {
                                 const val = e.target.value;
                                 setSeSourceSearch(prev => ({ ...prev, [idx]: val }));
@@ -6827,9 +7260,9 @@ function App() {
                             {activeSeSourceRow === idx && seSourceSuggestions[idx] && seSourceSuggestions[idx].length > 0 && (
                               <div className="autocomplete-dropdown" style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100, maxHeight: '120px', overflowY: 'auto', backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
                                 {seSourceSuggestions[idx].map(w => (
-                                  <div 
-                                    key={w.name} 
-                                    className="dropdown-item" 
+                                  <div
+                                    key={w.name}
+                                    className="dropdown-item"
                                     style={{ padding: '6px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', fontSize: '11px', color: '#111' }}
                                     onClick={() => selectSeSource(idx, w)}
                                   >
@@ -6840,11 +7273,11 @@ function App() {
                             )}
                           </td>
                           <td style={{ position: 'relative', minWidth: '180px' }}>
-                            <input 
-                              type="text" 
-                              className="text-input" 
-                              style={{ padding: '4px 8px', fontSize: '13px' }} 
-                              value={seTargetSearch[idx] !== undefined ? seTargetSearch[idx] : item.targetWarehouse} 
+                            <input
+                              type="text"
+                              className="text-input"
+                              style={{ padding: '4px 8px', fontSize: '13px' }}
+                              value={seTargetSearch[idx] !== undefined ? seTargetSearch[idx] : item.targetWarehouse}
                               onChange={(e) => {
                                 const val = e.target.value;
                                 setSeTargetSearch(prev => ({ ...prev, [idx]: val }));
@@ -6860,9 +7293,9 @@ function App() {
                             {activeSeTargetRow === idx && seTargetSuggestions[idx] && seTargetSuggestions[idx].length > 0 && (
                               <div className="autocomplete-dropdown" style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100, maxHeight: '120px', overflowY: 'auto', backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
                                 {seTargetSuggestions[idx].map(w => (
-                                  <div 
-                                    key={w.name} 
-                                    className="dropdown-item" 
+                                  <div
+                                    key={w.name}
+                                    className="dropdown-item"
                                     style={{ padding: '6px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', fontSize: '11px', color: '#111' }}
                                     onClick={() => selectSeTarget(idx, w)}
                                   >
@@ -6877,12 +7310,12 @@ function App() {
                             <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{item.name}</div>
                           </td>
                           <td>
-                            <input 
-                              type="number" 
+                            <input
+                              type="number"
                               step="any"
-                              className="text-input" 
-                              style={{ padding: '4px 8px', fontSize: '13px' }} 
-                              value={item.qty} 
+                              className="text-input"
+                              style={{ padding: '4px 8px', fontSize: '13px' }}
+                              value={item.qty}
                               onChange={(e) => {
                                 const newItems = [...stockEntryModal.items];
                                 newItems[idx].qty = e.target.value;
@@ -6899,16 +7332,56 @@ function App() {
                 </div>
               </div>
 
-              <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' }}>
-                <button type="button" className="secondary-btn" onClick={() => setStockEntryModal(null)}>Cancel</button>
-                <button type="submit" className="primary-btn" disabled={seSaving} style={{ backgroundColor: 'var(--accent)', borderColor: 'var(--accent)' }}>
+              <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  onClick={() => setStockEntryModal(null)}
+                  disabled={seSaving}
+                >
+                  Cancel
+                </button>
+
+                {stockEntryModal.stockEntryName && (
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    disabled
+                  >
+                    Draft: {stockEntryModal.stockEntryName}
+                  </button>
+                )}
+
+                <button
+                  type="submit"
+                  className="primary-btn"
+                  disabled={seSaving}
+                  style={{ backgroundColor: 'var(--accent)', borderColor: 'var(--accent)' }}
+                >
                   {seSaving ? (
                     <>
                       <span className="spinner" style={{ display: 'inline-block', width: '12px', height: '12px', border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite', marginRight: '6px' }}></span>
-                      Saving...
+                      {stockEntryModal.stockEntryName ? 'Updating Draft...' : 'Saving Draft...'}
                     </>
-                  ) : 'Save & Submit Stock Entry'}
+                  ) : (stockEntryModal.stockEntryName ? 'Update Stock Entry Draft' : 'Save Stock Entry')}
                 </button>
+
+                {stockEntryModal.stockEntryName && (
+                  <button
+                    type="button"
+                    className="primary-btn"
+                    disabled={seSaving}
+                    onClick={handleSubmitStockEntry}
+                    style={{ backgroundColor: 'var(--success)', borderColor: 'var(--success)' }}
+                  >
+                    {seSaving ? (
+                      <>
+                        <span className="spinner" style={{ display: 'inline-block', width: '12px', height: '12px', border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite', marginRight: '6px' }}></span>
+                        Submitting...
+                      </>
+                    ) : 'Submit Stock Entry'}
+                  </button>
+                )}
               </div>
             </form>
           </div>
@@ -6925,41 +7398,41 @@ function App() {
               </h3>
               <button style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#8c7664' }} onClick={() => setEmailModal(null)}>✕</button>
             </div>
-            
+
             <form onSubmit={handleSendEmail} style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
               <div>
                 <label style={{ fontSize: '11px', fontWeight: '700', color: '#7c6553', display: 'block', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Recipient Email *</label>
-                <input 
-                  type="email" 
-                  className="form-input" 
+                <input
+                  type="email"
+                  className="form-input"
                   style={{ borderColor: '#dcd1c4', backgroundColor: '#fff', color: '#3c3025' }}
-                  value={emailRecipient} 
-                  onChange={(e) => setEmailRecipient(e.target.value)} 
-                  required 
+                  value={emailRecipient}
+                  onChange={(e) => setEmailRecipient(e.target.value)}
+                  required
                   placeholder="enter email address..."
                 />
               </div>
 
               <div>
                 <label style={{ fontSize: '11px', fontWeight: '700', color: '#7c6553', display: 'block', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Subject</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
+                <input
+                  type="text"
+                  className="form-input"
                   style={{ borderColor: '#dcd1c4', backgroundColor: '#fff', color: '#3c3025' }}
-                  value={emailSubject} 
-                  onChange={(e) => setEmailSubject(e.target.value)} 
-                  required 
+                  value={emailSubject}
+                  onChange={(e) => setEmailSubject(e.target.value)}
+                  required
                 />
               </div>
 
               <div>
                 <label style={{ fontSize: '11px', fontWeight: '700', color: '#7c6553', display: 'block', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Message Body</label>
-                <textarea 
-                  className="form-input" 
+                <textarea
+                  className="form-input"
                   style={{ minHeight: '100px', borderColor: '#dcd1c4', backgroundColor: '#fff', color: '#3c3025', fontFamily: 'inherit', fontSize: '12px', padding: '8px' }}
-                  value={emailBody} 
-                  onChange={(e) => setEmailBody(e.target.value)} 
-                  required 
+                  value={emailBody}
+                  onChange={(e) => setEmailBody(e.target.value)}
+                  required
                 />
               </div>
 
@@ -6972,9 +7445,9 @@ function App() {
 
               <div className="modal-footer" style={{ borderTop: '1px solid #eadecf', paddingTop: '12px', display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '8px' }}>
                 <button type="button" className="secondary-btn" style={{ backgroundColor: '#e7dfd8', color: '#5c4a3c', border: 'none' }} onClick={() => setEmailModal(null)} disabled={emailSending}>Cancel</button>
-                <button 
-                  type="submit" 
-                  className="primary-btn" 
+                <button
+                  type="submit"
+                  className="primary-btn"
                   style={{ backgroundColor: '#a27b5c', borderColor: '#a27b5c', color: '#fff', display: 'flex', alignItems: 'center', gap: '6px' }}
                   disabled={emailSending}
                 >
@@ -6995,7 +7468,7 @@ function App() {
 
       {/* Modal: Create Sales Invoice */}
       {showCreateInvoiceModal && (
-        <SalesInvoiceFormModal 
+        <SalesInvoiceFormModal
           onClose={() => setShowCreateInvoiceModal(false)}
           products={PRODUCTS}
           loading={salesLoading}
@@ -7019,7 +7492,7 @@ function App() {
 
       {/* Modal: Amend Sales Invoice */}
       {showAmendInvoiceModal && selectedInvoice && (
-        <SalesInvoiceFormModal 
+        <SalesInvoiceFormModal
           onClose={() => setShowAmendInvoiceModal(false)}
           products={PRODUCTS}
           initialData={selectedInvoice}
@@ -7045,7 +7518,7 @@ function App() {
 
       {/* Modal: Create Delivery Note */}
       {showCreateDeliveryNoteModal && (
-        <DeliveryNoteFormModal 
+        <DeliveryNoteFormModal
           onClose={() => setShowCreateDeliveryNoteModal(false)}
           products={PRODUCTS}
           loading={salesLoading}
@@ -7069,7 +7542,7 @@ function App() {
 
       {/* Modal: Amend Delivery Note */}
       {showAmendDeliveryNoteModal && selectedDeliveryNote && (
-        <DeliveryNoteFormModal 
+        <DeliveryNoteFormModal
           onClose={() => setShowAmendDeliveryNoteModal(false)}
           products={PRODUCTS}
           initialData={selectedDeliveryNote}
@@ -7106,9 +7579,9 @@ function App() {
             <p style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '24px', lineHeight: '1.5' }}>
               {alertModal.message}
             </p>
-            <button 
-              className="primary-btn" 
-              style={{ width: '100%', justifyContent: 'center' }} 
+            <button
+              className="primary-btn"
+              style={{ width: '100%', justifyContent: 'center' }}
               onClick={() => setAlertModal(null)}
             >
               Dismiss
@@ -7146,7 +7619,7 @@ function SafetyIncidentFormModal({ onClose, onSubmit, employeeList, handleSearch
   const [dateResumption, setDateResumption] = useState('');
   const [correctiveAction, setCorrectiveAction] = useState('');
   const [dateActionTaken, setDateActionTaken] = useState('');
-  
+
   const [operator, setOperator] = useState('');
   const [supervisor, setSupervisor] = useState('');
   const [overallComments, setOverallComments] = useState('');
@@ -7192,29 +7665,29 @@ function SafetyIncidentFormModal({ onClose, onSubmit, employeeList, handleSearch
         </div>
         <form onSubmit={handleSubmitForm}>
           <div className="modal-content" style={{ maxHeight: '75vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            
+
             {/* Section 1: Personal Data */}
             <div>
               <h4 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '6px', marginBottom: '12px', color: 'var(--accent)', fontSize: '13px' }}>1. Personal Data of Injured Person</h4>
               <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '12px' }}>
                 <div style={{ position: 'relative' }}>
                   <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Name of Injured Person *</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    required 
-                    value={injuredName} 
+                  <input
+                    type="text"
+                    className="form-input"
+                    required
+                    value={injuredName}
                     onChange={(e) => {
                       setInjuredName(e.target.value);
                       handleSearchEmployees(e.target.value, 'safetyInjured');
-                    }} 
-                    placeholder="Search employee (min 3 chars)" 
+                    }}
+                    placeholder="Search employee (min 3 chars)"
                   />
                   {showEmployeeDropdown && activeSearchField === 'safetyInjured' && (
                     <div className="autocomplete-dropdown" style={{ top: '100%', zIndex: 10 }}>
                       {employeeList.map(emp => (
-                        <div 
-                          key={emp.name} 
+                        <div
+                          key={emp.name}
                           className="dropdown-item"
                           onClick={() => {
                             setInjuredName(`${emp.employee_name || emp.name} (${emp.name})`);
@@ -7357,21 +7830,21 @@ function SafetyIncidentFormModal({ onClose, onSubmit, employeeList, handleSearch
               </div>
               <div className="form-group" style={{ marginTop: '12px', marginBottom: '12px' }}>
                 <label style={{ fontSize: '11px', fontWeight: '600' }}>Overall Comments / Remarks</label>
-                <textarea 
-                  className="form-input" 
-                  style={{ minHeight: '50px', padding: '6px' }} 
-                  value={overallComments} 
-                  onChange={e => setOverallComments(e.target.value)} 
+                <textarea
+                  className="form-input"
+                  style={{ minHeight: '50px', padding: '6px' }}
+                  value={overallComments}
+                  onChange={e => setOverallComments(e.target.value)}
                   placeholder="Enter overall comments or observations about this incident notification..."
                 />
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px', marginTop: '12px' }}>
                 <div style={{ position: 'relative' }}>
                   <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Sign of Operator / Logger *</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    required 
+                  <input
+                    type="text"
+                    className="form-input"
+                    required
                     value={operator}
                     onChange={(e) => {
                       setOperator(e.target.value);
@@ -7382,8 +7855,8 @@ function SafetyIncidentFormModal({ onClose, onSubmit, employeeList, handleSearch
                   {showEmployeeDropdown && activeSearchField === 'safetyOperator' && (
                     <div className="autocomplete-dropdown">
                       {employeeList.map(emp => (
-                        <div 
-                          key={emp.name} 
+                        <div
+                          key={emp.name}
                           className="dropdown-item"
                           onClick={() => {
                             setOperator(`${emp.employee_name || emp.name} (${emp.name})`);
@@ -7398,10 +7871,10 @@ function SafetyIncidentFormModal({ onClose, onSubmit, employeeList, handleSearch
                 </div>
                 <div style={{ position: 'relative' }}>
                   <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Sign of Supervisor / Approver *</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    required 
+                  <input
+                    type="text"
+                    className="form-input"
+                    required
                     value={supervisor}
                     onChange={(e) => {
                       setSupervisor(e.target.value);
@@ -7412,8 +7885,8 @@ function SafetyIncidentFormModal({ onClose, onSubmit, employeeList, handleSearch
                   {showEmployeeDropdown && activeSearchField === 'safetySupervisor' && (
                     <div className="autocomplete-dropdown">
                       {employeeList.map(emp => (
-                        <div 
-                          key={emp.name} 
+                        <div
+                          key={emp.name}
                           className="dropdown-item"
                           onClick={() => {
                             setSupervisor(`${emp.employee_name || emp.name} (${emp.name})`);
@@ -7481,7 +7954,7 @@ function SafetyFirstAidFormModal({ onClose, onSubmit, employeeList, handleSearch
         </div>
         <form onSubmit={handleSubmitForm}>
           <div className="modal-content" style={{ maxHeight: '75vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div>
                 <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Date</label>
@@ -7495,10 +7968,10 @@ function SafetyFirstAidFormModal({ onClose, onSubmit, employeeList, handleSearch
 
             <div style={{ position: 'relative' }}>
               <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Employee / Person Injured *</label>
-              <input 
-                type="text" 
-                className="form-input" 
-                required 
+              <input
+                type="text"
+                className="form-input"
+                required
                 value={injuredName}
                 onChange={(e) => {
                   setInjuredName(e.target.value);
@@ -7509,8 +7982,8 @@ function SafetyFirstAidFormModal({ onClose, onSubmit, employeeList, handleSearch
               {showEmployeeDropdown && activeSearchField === 'firstAidEmployee' && (
                 <div className="autocomplete-dropdown">
                   {employeeList.map(emp => (
-                    <div 
-                      key={emp.name} 
+                    <div
+                      key={emp.name}
                       className="dropdown-item"
                       onClick={() => {
                         setInjuredName(`${emp.employee_name || emp.name} (${emp.name})`);
@@ -7545,11 +8018,11 @@ function SafetyFirstAidFormModal({ onClose, onSubmit, employeeList, handleSearch
 
             <div className="form-group" style={{ marginTop: '12px', marginBottom: '12px' }}>
               <label style={{ fontSize: '11px', fontWeight: '600' }}>Overall Comments / Remarks</label>
-              <textarea 
-                className="form-input" 
-                style={{ minHeight: '50px', padding: '6px' }} 
-                value={overallComments} 
-                onChange={e => setOverallComments(e.target.value)} 
+              <textarea
+                className="form-input"
+                style={{ minHeight: '50px', padding: '6px' }}
+                value={overallComments}
+                onChange={e => setOverallComments(e.target.value)}
                 placeholder="Enter overall comments or observations about this first aid administration..."
               />
             </div>
@@ -7561,10 +8034,10 @@ function SafetyFirstAidFormModal({ onClose, onSubmit, employeeList, handleSearch
               </div>
               <div style={{ position: 'relative' }}>
                 <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Approved By Supervisor *</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  required 
+                <input
+                  type="text"
+                  className="form-input"
+                  required
                   value={supervisor}
                   onChange={(e) => {
                     setSupervisor(e.target.value);
@@ -7575,8 +8048,8 @@ function SafetyFirstAidFormModal({ onClose, onSubmit, employeeList, handleSearch
                 {showEmployeeDropdown && activeSearchField === 'firstAidSupervisor' && (
                   <div className="autocomplete-dropdown">
                     {employeeList.map(emp => (
-                      <div 
-                        key={emp.name} 
+                      <div
+                        key={emp.name}
                         className="dropdown-item"
                         onClick={() => {
                           setSupervisor(`${emp.employee_name || emp.name} (${emp.name})`);
@@ -7668,7 +8141,7 @@ function SafetySwabFormModal({ onClose, onSubmit }) {
         </div>
         <form onSubmit={handleSubmitForm}>
           <div className="modal-content" style={{ maxHeight: '75vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            
+
             <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
               <div>
                 <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Analyst *</label>
@@ -7699,8 +8172,8 @@ function SafetySwabFormModal({ onClose, onSubmit }) {
                 <tbody>
                   {locations.map(loc => {
                     const rowWarning = loc.key !== 'warehouse' && (
-                      Number(swabData[loc.key].yeast || 0) > 15 || 
-                      Number(swabData[loc.key].mould || 0) > 15 || 
+                      Number(swabData[loc.key].yeast || 0) > 15 ||
+                      Number(swabData[loc.key].mould || 0) > 15 ||
                       Number(swabData[loc.key].hpc || 0) > 15
                     );
                     return (
@@ -7709,35 +8182,35 @@ function SafetySwabFormModal({ onClose, onSubmit }) {
                           {loc.name} {loc.key === 'warehouse' && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>(Exempt)</span>}
                         </td>
                         <td style={{ padding: '6px' }}>
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             min="0"
-                            className="form-input" 
+                            className="form-input"
                             style={{ height: '30px', textAlign: 'center', borderColor: rowWarning && Number(swabData[loc.key].yeast || 0) > 15 ? 'var(--danger)' : '' }}
-                            value={swabData[loc.key].yeast} 
-                            onChange={e => handleInputChange(loc.key, 'yeast', e.target.value)} 
+                            value={swabData[loc.key].yeast}
+                            onChange={e => handleInputChange(loc.key, 'yeast', e.target.value)}
                             placeholder="0"
                           />
                         </td>
                         <td style={{ padding: '6px' }}>
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             min="0"
-                            className="form-input" 
+                            className="form-input"
                             style={{ height: '30px', textAlign: 'center', borderColor: rowWarning && Number(swabData[loc.key].mould || 0) > 15 ? 'var(--danger)' : '' }}
-                            value={swabData[loc.key].mould} 
-                            onChange={e => handleInputChange(loc.key, 'mould', e.target.value)} 
+                            value={swabData[loc.key].mould}
+                            onChange={e => handleInputChange(loc.key, 'mould', e.target.value)}
                             placeholder="0"
                           />
                         </td>
                         <td style={{ padding: '6px' }}>
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             min="0"
-                            className="form-input" 
+                            className="form-input"
                             style={{ height: '30px', textAlign: 'center', borderColor: rowWarning && Number(swabData[loc.key].hpc || 0) > 15 ? 'var(--danger)' : '' }}
-                            value={swabData[loc.key].hpc} 
-                            onChange={e => handleInputChange(loc.key, 'hpc', e.target.value)} 
+                            value={swabData[loc.key].hpc}
+                            onChange={e => handleInputChange(loc.key, 'hpc', e.target.value)}
                             placeholder="0"
                           />
                         </td>
@@ -7750,11 +8223,11 @@ function SafetySwabFormModal({ onClose, onSubmit }) {
 
             <div className="form-group" style={{ marginTop: '12px', marginBottom: '12px' }}>
               <label style={{ fontSize: '11px', fontWeight: '600' }}>Overall Comments / Remarks</label>
-              <textarea 
-                className="form-input" 
-                style={{ minHeight: '50px', padding: '6px' }} 
-                value={overallComments} 
-                onChange={e => setOverallComments(e.target.value)} 
+              <textarea
+                className="form-input"
+                style={{ minHeight: '50px', padding: '6px' }}
+                value={overallComments}
+                onChange={e => setOverallComments(e.target.value)}
                 placeholder="Enter overall comments or observations about this microbiology swab run..."
               />
             </div>
@@ -7786,7 +8259,7 @@ function SafetyReportViewerModal({ record, onClose }) {
           <button className="no-print" style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px' }} onClick={onClose}>✕</button>
         </div>
         <div className="modal-content" style={{ maxHeight: '75vh', overflowY: 'auto', fontSize: '12px' }}>
-          
+
           <div style={{ padding: '12px 16px', borderRadius: '6px', backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>DOCUMENT TYPE</span>
@@ -7927,7 +8400,7 @@ function SafetyReportViewerModal({ record, onClose }) {
                 <div><strong>Inductor Date:</strong> {record.inductorDate}</div>
                 <div><strong>Approved By:</strong> {record.approvedByName} (Signature: {record.approvedBySign})</div>
               </div>
-              
+
               <h4 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '4px', color: 'var(--accent)', marginBottom: '8px', fontWeight: '700' }}>Induction Checklist Items Status</h4>
               <table className="custom-table" style={{ width: '100%', fontSize: '11px' }}>
                 <thead>
@@ -8034,7 +8507,7 @@ function LabForm1Modal({ onClose, onSubmit, employeeList, handleSearchEmployees,
         </div>
         <form onSubmit={handleSubmitForm}>
           <div className="modal-content" style={{ maxHeight: '75vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            
+
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
               <div>
                 <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Date of Analysis</label>
@@ -8042,13 +8515,13 @@ function LabForm1Modal({ onClose, onSubmit, employeeList, handleSearchEmployees,
               </div>
               <div style={{ position: 'relative' }}>
                 <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Analyst Name *</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  required 
-                  value={analyst} 
-                  onChange={(e) => { setAnalyst(e.target.value); handleSearchEmployees(e.target.value, 'labAnalyst'); }} 
-                  placeholder="Search Analyst..." 
+                <input
+                  type="text"
+                  className="form-input"
+                  required
+                  value={analyst}
+                  onChange={(e) => { setAnalyst(e.target.value); handleSearchEmployees(e.target.value, 'labAnalyst'); }}
+                  placeholder="Search Analyst..."
                 />
                 {showEmployeeDropdown && activeSearchField === 'labAnalyst' && (
                   <div className="autocomplete-dropdown">
@@ -8062,13 +8535,13 @@ function LabForm1Modal({ onClose, onSubmit, employeeList, handleSearchEmployees,
               </div>
               <div style={{ position: 'relative' }}>
                 <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Operations Manager *</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  required 
-                  value={manager} 
-                  onChange={(e) => { setManager(e.target.value); handleSearchEmployees(e.target.value, 'labManager'); }} 
-                  placeholder="Search Manager..." 
+                <input
+                  type="text"
+                  className="form-input"
+                  required
+                  value={manager}
+                  onChange={(e) => { setManager(e.target.value); handleSearchEmployees(e.target.value, 'labManager'); }}
+                  placeholder="Search Manager..."
                 />
                 {showEmployeeDropdown && activeSearchField === 'labManager' && (
                   <div className="autocomplete-dropdown">
@@ -8226,7 +8699,7 @@ function LabForm9Modal({ onClose, onSubmit, employeeList, handleSearchEmployees,
         </div>
         <form onSubmit={handleSubmitForm}>
           <div className="modal-content" style={{ maxHeight: '75vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', fontSize: '12px' }}>
-            
+
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
               <div>
                 <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Date</label>
@@ -8234,13 +8707,13 @@ function LabForm9Modal({ onClose, onSubmit, employeeList, handleSearchEmployees,
               </div>
               <div style={{ position: 'relative' }}>
                 <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Analyst *</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  required 
-                  value={analyst} 
-                  onChange={(e) => { setAnalyst(e.target.value); handleSearchEmployees(e.target.value, 'labAnalyst'); }} 
-                  placeholder="Search Analyst..." 
+                <input
+                  type="text"
+                  className="form-input"
+                  required
+                  value={analyst}
+                  onChange={(e) => { setAnalyst(e.target.value); handleSearchEmployees(e.target.value, 'labAnalyst'); }}
+                  placeholder="Search Analyst..."
                 />
                 {showEmployeeDropdown && activeSearchField === 'labAnalyst' && (
                   <div className="autocomplete-dropdown">
@@ -8254,13 +8727,13 @@ function LabForm9Modal({ onClose, onSubmit, employeeList, handleSearchEmployees,
               </div>
               <div style={{ position: 'relative' }}>
                 <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Verified By *</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  required 
-                  value={verifiedBy} 
-                  onChange={(e) => { setVerifiedBy(e.target.value); handleSearchEmployees(e.target.value, 'labVerifiedBy'); }} 
-                  placeholder="Search Verifier..." 
+                <input
+                  type="text"
+                  className="form-input"
+                  required
+                  value={verifiedBy}
+                  onChange={(e) => { setVerifiedBy(e.target.value); handleSearchEmployees(e.target.value, 'labVerifiedBy'); }}
+                  placeholder="Search Verifier..."
                 />
                 {showEmployeeDropdown && activeSearchField === 'labVerifiedBy' && (
                   <div className="autocomplete-dropdown">
@@ -8453,7 +8926,7 @@ function LabForm11Modal({ onClose, onSubmit, employeeList, handleSearchEmployees
         </div>
         <form onSubmit={handleSubmitForm}>
           <div className="modal-content" style={{ maxHeight: '75vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', fontSize: '12px' }}>
-            
+
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
               <div>
                 <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Date of Analysis</label>
@@ -8461,13 +8934,13 @@ function LabForm11Modal({ onClose, onSubmit, employeeList, handleSearchEmployees
               </div>
               <div style={{ position: 'relative' }}>
                 <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Analyst Name *</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  required 
-                  value={analyst} 
-                  onChange={(e) => { setAnalyst(e.target.value); handleSearchEmployees(e.target.value, 'labAnalyst'); }} 
-                  placeholder="Search Analyst..." 
+                <input
+                  type="text"
+                  className="form-input"
+                  required
+                  value={analyst}
+                  onChange={(e) => { setAnalyst(e.target.value); handleSearchEmployees(e.target.value, 'labAnalyst'); }}
+                  placeholder="Search Analyst..."
                 />
                 {showEmployeeDropdown && activeSearchField === 'labAnalyst' && (
                   <div className="autocomplete-dropdown">
@@ -8628,7 +9101,7 @@ function LabForm21Modal({ onClose, onSubmit, employeeList, handleSearchEmployees
         </div>
         <form onSubmit={handleSubmitForm}>
           <div className="modal-content" style={{ maxHeight: '75vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', fontSize: '12px' }}>
-            
+
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
               <div>
                 <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Date</label>
@@ -8640,13 +9113,13 @@ function LabForm21Modal({ onClose, onSubmit, employeeList, handleSearchEmployees
               </div>
               <div style={{ position: 'relative' }}>
                 <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Verified By Supervisor *</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  required 
-                  value={verifiedBy} 
-                  onChange={(e) => { setVerifiedBy(e.target.value); handleSearchEmployees(e.target.value, 'labVerifiedBy'); }} 
-                  placeholder="Search Supervisor..." 
+                <input
+                  type="text"
+                  className="form-input"
+                  required
+                  value={verifiedBy}
+                  onChange={(e) => { setVerifiedBy(e.target.value); handleSearchEmployees(e.target.value, 'labVerifiedBy'); }}
+                  placeholder="Search Supervisor..."
                 />
                 {showEmployeeDropdown && activeSearchField === 'labVerifiedBy' && (
                   <div className="autocomplete-dropdown">
@@ -8784,7 +9257,7 @@ function LabReportViewerModal({ record, onClose }) {
           <button className="no-print" style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px' }} onClick={onClose}>✕</button>
         </div>
         <div className="modal-content" style={{ maxHeight: '75vh', overflowY: 'auto', fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          
+
           <div style={{ padding: '12px 16px', borderRadius: '6px', backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>QC REPORT TYPE</span>
@@ -8843,7 +9316,7 @@ function LabReportViewerModal({ record, onClose }) {
                 <div><strong>Analyst:</strong> {record.analyst}</div>
                 <div><strong>Verified By:</strong> {record.verifiedBy}</div>
               </div>
-              
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div>
                   <h4 style={{ color: 'var(--accent)', marginBottom: '6px' }}>Raw Water Levels</h4>
@@ -9164,7 +9637,7 @@ function LabReportViewerModal({ record, onClose }) {
                     ⚠️ Warning: One or more Silver Ion photometer readings are below acceptance spec level (minimum 10ppb).
                   </div>
                 )}
-                
+
                 {record.sets?.map((set, sIdx) => (
                   <div key={sIdx} style={{ border: '1px solid var(--border-color)', padding: '12px', borderRadius: '8px' }}>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '8px' }}>
@@ -9270,7 +9743,7 @@ function LabForm36Modal({ onClose, onSubmit, employeeList, handleSearchEmployees
         </div>
         <form onSubmit={handleSubmitForm}>
           <div className="modal-content" style={{ maxHeight: '75vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', fontSize: '12px' }}>
-            
+
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
               <div>
                 <label style={{ fontSize: '11px', fontWeight: '600' }}>Date of Batch</label>
@@ -9289,13 +9762,13 @@ function LabForm36Modal({ onClose, onSubmit, employeeList, handleSearchEmployees
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
               <div style={{ position: 'relative' }}>
                 <label style={{ fontSize: '11px', fontWeight: '600' }}>Prepared By *</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  required 
-                  value={preparedBy} 
-                  onChange={(e) => { setPreparedBy(e.target.value); handleSearchEmployees(e.target.value, 'labPreparedBy'); }} 
-                  placeholder="Search Employee..." 
+                <input
+                  type="text"
+                  className="form-input"
+                  required
+                  value={preparedBy}
+                  onChange={(e) => { setPreparedBy(e.target.value); handleSearchEmployees(e.target.value, 'labPreparedBy'); }}
+                  placeholder="Search Employee..."
                 />
                 {showEmployeeDropdown && activeSearchField === 'labPreparedBy' && (
                   <div className="autocomplete-dropdown">
@@ -9309,13 +9782,13 @@ function LabForm36Modal({ onClose, onSubmit, employeeList, handleSearchEmployees
               </div>
               <div style={{ position: 'relative' }}>
                 <label style={{ fontSize: '11px', fontWeight: '600' }}>Verified By *</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  required 
-                  value={verifiedBy} 
-                  onChange={(e) => { setVerifiedBy(e.target.value); handleSearchEmployees(e.target.value, 'labVerifiedBy'); }} 
-                  placeholder="Search Verifier..." 
+                <input
+                  type="text"
+                  className="form-input"
+                  required
+                  value={verifiedBy}
+                  onChange={(e) => { setVerifiedBy(e.target.value); handleSearchEmployees(e.target.value, 'labVerifiedBy'); }}
+                  placeholder="Search Verifier..."
                 />
                 {showEmployeeDropdown && activeSearchField === 'labVerifiedBy' && (
                   <div className="autocomplete-dropdown">
@@ -9329,13 +9802,13 @@ function LabForm36Modal({ onClose, onSubmit, employeeList, handleSearchEmployees
               </div>
               <div style={{ position: 'relative' }}>
                 <label style={{ fontSize: '11px', fontWeight: '600' }}>Lab Report Analysed By *</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  required 
-                  value={analysedBy} 
-                  onChange={(e) => { setAnalysedBy(e.target.value); handleSearchEmployees(e.target.value, 'labAnalyst'); }} 
-                  placeholder="Search Analyst..." 
+                <input
+                  type="text"
+                  className="form-input"
+                  required
+                  value={analysedBy}
+                  onChange={(e) => { setAnalysedBy(e.target.value); handleSearchEmployees(e.target.value, 'labAnalyst'); }}
+                  placeholder="Search Analyst..."
                 />
                 {showEmployeeDropdown && activeSearchField === 'labAnalyst' && (
                   <div className="autocomplete-dropdown">
@@ -9522,7 +9995,7 @@ function LabForm100Modal({ onClose, onSubmit, employeeList, handleSearchEmployee
         </div>
         <form onSubmit={handleSubmitForm}>
           <div className="modal-content" style={{ maxHeight: '75vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', fontSize: '12px' }}>
-            
+
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
               <div>
                 <label style={{ fontSize: '11px', fontWeight: '600' }}>Shift Date</label>
@@ -9538,13 +10011,13 @@ function LabForm100Modal({ onClose, onSubmit, employeeList, handleSearchEmployee
               </div>
               <div style={{ position: 'relative' }}>
                 <label style={{ fontSize: '11px', fontWeight: '600' }}>Production Supervisor *</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  required 
-                  value={supervisor} 
-                  onChange={(e) => { setSupervisor(e.target.value); handleSearchEmployees(e.target.value, 'labProdSupervisor'); }} 
-                  placeholder="Search Supervisor..." 
+                <input
+                  type="text"
+                  className="form-input"
+                  required
+                  value={supervisor}
+                  onChange={(e) => { setSupervisor(e.target.value); handleSearchEmployees(e.target.value, 'labProdSupervisor'); }}
+                  placeholder="Search Supervisor..."
                 />
                 {showEmployeeDropdown && activeSearchField === 'labProdSupervisor' && (
                   <div className="autocomplete-dropdown">
@@ -9587,12 +10060,12 @@ function LabForm100Modal({ onClose, onSubmit, employeeList, handleSearchEmployee
                 </div>
                 <div style={{ position: 'relative' }}>
                   <label style={{ fontSize: '10px' }}>Endorsed By *</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    required 
-                    value={endorsedBy} 
-                    onChange={(e) => { setEndorsedBy(e.target.value); handleSearchEmployees(e.target.value, 'labEndorsedBy'); }} 
+                  <input
+                    type="text"
+                    className="form-input"
+                    required
+                    value={endorsedBy}
+                    onChange={(e) => { setEndorsedBy(e.target.value); handleSearchEmployees(e.target.value, 'labEndorsedBy'); }}
                   />
                   {showEmployeeDropdown && activeSearchField === 'labEndorsedBy' && (
                     <div className="autocomplete-dropdown">
@@ -9606,12 +10079,12 @@ function LabForm100Modal({ onClose, onSubmit, employeeList, handleSearchEmployee
                 </div>
                 <div style={{ position: 'relative' }}>
                   <label style={{ fontSize: '10px' }}>Received By Warehouse *</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    required 
-                    value={receivedBy} 
-                    onChange={(e) => { setReceivedBy(e.target.value); handleSearchEmployees(e.target.value, 'labReceivedBy'); }} 
+                  <input
+                    type="text"
+                    className="form-input"
+                    required
+                    value={receivedBy}
+                    onChange={(e) => { setReceivedBy(e.target.value); handleSearchEmployees(e.target.value, 'labReceivedBy'); }}
                   />
                   {showEmployeeDropdown && activeSearchField === 'labReceivedBy' && (
                     <div className="autocomplete-dropdown">
@@ -9810,7 +10283,7 @@ function LabForm103Modal({ onClose, onSubmit, employeeList, handleSearchEmployee
         </div>
         <form onSubmit={handleSubmitForm}>
           <div className="modal-content" style={{ maxHeight: '75vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px', fontSize: '12px' }}>
-            
+
             <div style={{ padding: '8px 12px', backgroundColor: '#f9fafb', borderLeft: '4px solid var(--accent)', color: 'var(--text-heading)' }}>
               <strong>Acceptance specification bounds:</strong> Reading of Silver Ion should be **above 10ppb**.
             </div>
@@ -9831,13 +10304,13 @@ function LabForm103Modal({ onClose, onSubmit, employeeList, handleSearchEmployee
                 </div>
                 <div style={{ position: 'relative' }}>
                   <label>Technician *</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    style={{ height: '30px' }} 
-                    required 
-                    value={tech1} 
-                    onChange={(e) => { setTech1(e.target.value); handleSearchEmployees(e.target.value, 'labTechnician'); }} 
+                  <input
+                    type="text"
+                    className="form-input"
+                    style={{ height: '30px' }}
+                    required
+                    value={tech1}
+                    onChange={(e) => { setTech1(e.target.value); handleSearchEmployees(e.target.value, 'labTechnician'); }}
                   />
                   {showEmployeeDropdown && activeSearchField === 'labTechnician' && (
                     <div className="autocomplete-dropdown">
@@ -9851,13 +10324,13 @@ function LabForm103Modal({ onClose, onSubmit, employeeList, handleSearchEmployee
                 </div>
                 <div style={{ position: 'relative' }}>
                   <label>Verified By *</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    style={{ height: '30px' }} 
-                    required 
-                    value={verifier1} 
-                    onChange={(e) => { setVerifier1(e.target.value); handleSearchEmployees(e.target.value, 'labVerifiedBy'); }} 
+                  <input
+                    type="text"
+                    className="form-input"
+                    style={{ height: '30px' }}
+                    required
+                    value={verifier1}
+                    onChange={(e) => { setVerifier1(e.target.value); handleSearchEmployees(e.target.value, 'labVerifiedBy'); }}
                   />
                   {showEmployeeDropdown && activeSearchField === 'labVerifiedBy' && (
                     <div className="autocomplete-dropdown">
@@ -10065,12 +10538,12 @@ function SafetyForm37Modal({ onClose, onSubmit, employeeList, handleSearchEmploy
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
               <div style={{ position: 'relative' }}>
                 <label>Name of Visitor/Employee/Contractor *</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  required 
-                  value={name} 
-                  onChange={(e) => { setName(e.target.value); handleSearchEmployees(e.target.value, 'inductionInductee'); }} 
+                <input
+                  type="text"
+                  className="form-input"
+                  required
+                  value={name}
+                  onChange={(e) => { setName(e.target.value); handleSearchEmployees(e.target.value, 'inductionInductee'); }}
                 />
                 {showEmployeeDropdown && activeSearchField === 'inductionInductee' && (
                   <div className="autocomplete-dropdown">
@@ -10106,19 +10579,19 @@ function SafetyForm37Modal({ onClose, onSubmit, employeeList, handleSearchEmploy
                     <tr key={item.key} style={{ borderBottom: '1px solid var(--border-color)' }}>
                       <td style={{ padding: '8px' }}>{item.label}</td>
                       <td style={{ padding: '8px', textAlign: 'center' }}>
-                        <input 
-                          type="radio" 
-                          name={item.key} 
-                          checked={checklist[item.key] === 'YES'} 
-                          onChange={() => handleChecklistChange(item.key, 'YES')} 
+                        <input
+                          type="radio"
+                          name={item.key}
+                          checked={checklist[item.key] === 'YES'}
+                          onChange={() => handleChecklistChange(item.key, 'YES')}
                         />
                       </td>
                       <td style={{ padding: '8px', textAlign: 'center' }}>
-                        <input 
-                          type="radio" 
-                          name={item.key} 
-                          checked={checklist[item.key] === 'NO'} 
-                          onChange={() => handleChecklistChange(item.key, 'NO')} 
+                        <input
+                          type="radio"
+                          name={item.key}
+                          checked={checklist[item.key] === 'NO'}
+                          onChange={() => handleChecklistChange(item.key, 'NO')}
                         />
                       </td>
                     </tr>
@@ -10149,12 +10622,12 @@ function SafetyForm37Modal({ onClose, onSubmit, employeeList, handleSearchEmploy
                 <h4 style={{ fontWeight: '700', fontSize: '11px', marginBottom: '8px', color: 'var(--accent)' }}>Inductor Details</h4>
                 <div style={{ position: 'relative', marginBottom: '6px' }}>
                   <label>Inductor's Name *</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    required 
-                    value={inductorName} 
-                    onChange={(e) => { setInductorName(e.target.value); handleSearchEmployees(e.target.value, 'inductionInductor'); }} 
+                  <input
+                    type="text"
+                    className="form-input"
+                    required
+                    value={inductorName}
+                    onChange={(e) => { setInductorName(e.target.value); handleSearchEmployees(e.target.value, 'inductionInductor'); }}
                   />
                   {showEmployeeDropdown && activeSearchField === 'inductionInductor' && (
                     <div className="autocomplete-dropdown">
@@ -10182,12 +10655,12 @@ function SafetyForm37Modal({ onClose, onSubmit, employeeList, handleSearchEmploy
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div style={{ position: 'relative' }}>
                   <label>Approved By Name *</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    required 
-                    value={approvedByName} 
-                    onChange={(e) => { setApprovedByName(e.target.value); handleSearchEmployees(e.target.value, 'inductionApprovedBy'); }} 
+                  <input
+                    type="text"
+                    className="form-input"
+                    required
+                    value={approvedByName}
+                    onChange={(e) => { setApprovedByName(e.target.value); handleSearchEmployees(e.target.value, 'inductionApprovedBy'); }}
                   />
                   {showEmployeeDropdown && activeSearchField === 'inductionApprovedBy' && (
                     <div className="autocomplete-dropdown">
@@ -10279,14 +10752,14 @@ function MaintWeightCheckModal({ onClose, onSubmit, employeeList, handleSearchEm
                       <input type="date" className="form-input" style={{ height: '28px' }} required value={row.date} onChange={e => handleRowChange(idx, 'date', e.target.value)} />
                     </td>
                     <td style={{ position: 'relative' }}>
-                      <input 
-                        type="text" 
-                        className="form-input" 
-                        style={{ height: '28px' }} 
-                        required 
-                        placeholder="Search Checked By..." 
-                        value={row.checkedBy} 
-                        onChange={(e) => { handleRowChange(idx, 'checkedBy', e.target.value); handleSearchEmployees(e.target.value, `weightCheckedBy-${idx}`); }} 
+                      <input
+                        type="text"
+                        className="form-input"
+                        style={{ height: '28px' }}
+                        required
+                        placeholder="Search Checked By..."
+                        value={row.checkedBy}
+                        onChange={(e) => { handleRowChange(idx, 'checkedBy', e.target.value); handleSearchEmployees(e.target.value, `weightCheckedBy-${idx}`); }}
                       />
                       {showEmployeeDropdown && activeSearchField === `weightCheckedBy-${idx}` && (
                         <div className="autocomplete-dropdown">
@@ -10299,14 +10772,14 @@ function MaintWeightCheckModal({ onClose, onSubmit, employeeList, handleSearchEm
                       )}
                     </td>
                     <td style={{ position: 'relative' }}>
-                      <input 
-                        type="text" 
-                        className="form-input" 
-                        style={{ height: '28px' }} 
-                        required 
-                        placeholder="Search Verified By..." 
-                        value={row.verifiedBy} 
-                        onChange={(e) => { handleRowChange(idx, 'verifiedBy', e.target.value); handleSearchEmployees(e.target.value, `weightVerifiedBy-${idx}`); }} 
+                      <input
+                        type="text"
+                        className="form-input"
+                        style={{ height: '28px' }}
+                        required
+                        placeholder="Search Verified By..."
+                        value={row.verifiedBy}
+                        onChange={(e) => { handleRowChange(idx, 'verifiedBy', e.target.value); handleSearchEmployees(e.target.value, `weightVerifiedBy-${idx}`); }}
                       />
                       {showEmployeeDropdown && activeSearchField === `weightVerifiedBy-${idx}` && (
                         <div className="autocomplete-dropdown">
@@ -10333,12 +10806,12 @@ function MaintWeightCheckModal({ onClose, onSubmit, employeeList, handleSearchEm
             </table>
             <div className="form-group" style={{ marginTop: '12px' }}>
               <label style={{ fontSize: '11px', fontWeight: '600' }}>Overall Comments / Remarks</label>
-              <textarea 
-                className="form-input" 
-                style={{ minHeight: '50px', padding: '6px' }} 
-                value={overallComments} 
-                onChange={e => setOverallComments(e.target.value)} 
-                placeholder="Enter any additional observations, non-conformance notes, or adjustments made..." 
+              <textarea
+                className="form-input"
+                style={{ minHeight: '50px', padding: '6px' }}
+                value={overallComments}
+                onChange={e => setOverallComments(e.target.value)}
+                placeholder="Enter any additional observations, non-conformance notes, or adjustments made..."
               />
             </div>
           </div>
@@ -10395,19 +10868,19 @@ function MaintBreakdownModal({ onClose, onSubmit, employeeList, handleSearchEmpl
         </div>
         <form onSubmit={handleSubmit}>
           <div className="modal-content" style={{ maxHeight: '72vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', fontSize: '12px' }}>
-            
+
             {/* Section 1 */}
             <div style={{ border: '1px solid var(--border-color)', padding: '12px', borderRadius: '8px' }}>
               <h4 style={{ color: 'var(--accent)', marginBottom: '8px', fontWeight: '700' }}>Section 1: To be filled-up by the Requestor</h4>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '8px' }}>
                 <div style={{ position: 'relative' }}>
                   <label>Requestor Name *</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    required 
-                    value={requestorName} 
-                    onChange={(e) => { setRequestorName(e.target.value); handleSearchEmployees(e.target.value, 'breakdownRequestor'); }} 
+                  <input
+                    type="text"
+                    className="form-input"
+                    required
+                    value={requestorName}
+                    onChange={(e) => { setRequestorName(e.target.value); handleSearchEmployees(e.target.value, 'breakdownRequestor'); }}
                   />
                   {showEmployeeDropdown && activeSearchField === 'breakdownRequestor' && (
                     <div className="autocomplete-dropdown">
@@ -10441,12 +10914,12 @@ function MaintBreakdownModal({ onClose, onSubmit, employeeList, handleSearchEmpl
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div style={{ position: 'relative' }}>
                   <label>Checked By (SV Name & Sign) *</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    required 
-                    value={checkedBySV} 
-                    onChange={(e) => { setCheckedBySV(e.target.value); handleSearchEmployees(e.target.value, 'breakdownCheckedSV'); }} 
+                  <input
+                    type="text"
+                    className="form-input"
+                    required
+                    value={checkedBySV}
+                    onChange={(e) => { setCheckedBySV(e.target.value); handleSearchEmployees(e.target.value, 'breakdownCheckedSV'); }}
                   />
                   {showEmployeeDropdown && activeSearchField === 'breakdownCheckedSV' && (
                     <div className="autocomplete-dropdown">
@@ -10460,12 +10933,12 @@ function MaintBreakdownModal({ onClose, onSubmit, employeeList, handleSearchEmpl
                 </div>
                 <div style={{ position: 'relative' }}>
                   <label>Approved By (FM Name & Sign) *</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    required 
-                    value={approvedByFM} 
-                    onChange={(e) => { setApprovedByFM(e.target.value); handleSearchEmployees(e.target.value, 'breakdownApprovedFM'); }} 
+                  <input
+                    type="text"
+                    className="form-input"
+                    required
+                    value={approvedByFM}
+                    onChange={(e) => { setApprovedByFM(e.target.value); handleSearchEmployees(e.target.value, 'breakdownApprovedFM'); }}
                   />
                   {showEmployeeDropdown && activeSearchField === 'breakdownApprovedFM' && (
                     <div className="autocomplete-dropdown">
@@ -10486,12 +10959,12 @@ function MaintBreakdownModal({ onClose, onSubmit, employeeList, handleSearchEmpl
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '8px' }}>
                 <div style={{ position: 'relative' }}>
                   <label>Received By *</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    required 
-                    value={receivedBy} 
-                    onChange={(e) => { setReceivedBy(e.target.value); handleSearchEmployees(e.target.value, 'breakdownReceivedBy'); }} 
+                  <input
+                    type="text"
+                    className="form-input"
+                    required
+                    value={receivedBy}
+                    onChange={(e) => { setReceivedBy(e.target.value); handleSearchEmployees(e.target.value, 'breakdownReceivedBy'); }}
                   />
                   {showEmployeeDropdown && activeSearchField === 'breakdownReceivedBy' && (
                     <div className="autocomplete-dropdown">
@@ -10534,12 +11007,12 @@ function MaintBreakdownModal({ onClose, onSubmit, employeeList, handleSearchEmpl
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div style={{ position: 'relative' }}>
                   <label>Repaired Done By (Name & Sign) *</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    required 
-                    value={repairedDoneBy} 
-                    onChange={(e) => { setRepairedDoneBy(e.target.value); handleSearchEmployees(e.target.value, 'breakdownRepairedBy'); }} 
+                  <input
+                    type="text"
+                    className="form-input"
+                    required
+                    value={repairedDoneBy}
+                    onChange={(e) => { setRepairedDoneBy(e.target.value); handleSearchEmployees(e.target.value, 'breakdownRepairedBy'); }}
                   />
                   {showEmployeeDropdown && activeSearchField === 'breakdownRepairedBy' && (
                     <div className="autocomplete-dropdown">
@@ -10553,12 +11026,12 @@ function MaintBreakdownModal({ onClose, onSubmit, employeeList, handleSearchEmpl
                 </div>
                 <div style={{ position: 'relative' }}>
                   <label>Approved By (MM Name & Sign) *</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    required 
-                    value={approvedByMM} 
-                    onChange={(e) => { setApprovedByMM(e.target.value); handleSearchEmployees(e.target.value, 'breakdownApprovedMM'); }} 
+                  <input
+                    type="text"
+                    className="form-input"
+                    required
+                    value={approvedByMM}
+                    onChange={(e) => { setApprovedByMM(e.target.value); handleSearchEmployees(e.target.value, 'breakdownApprovedMM'); }}
                   />
                   {showEmployeeDropdown && activeSearchField === 'breakdownApprovedMM' && (
                     <div className="autocomplete-dropdown">
@@ -10575,12 +11048,12 @@ function MaintBreakdownModal({ onClose, onSubmit, employeeList, handleSearchEmpl
 
             <div className="form-group" style={{ marginTop: '12px', marginBottom: '12px' }}>
               <label style={{ fontSize: '11px', fontWeight: '600' }}>Overall Comments / Remarks</label>
-              <textarea 
-                className="form-input" 
-                style={{ minHeight: '50px', padding: '6px' }} 
-                value={overallComments} 
-                onChange={e => setOverallComments(e.target.value)} 
-                placeholder="Enter any additional breakdown repair comments, root cause details, or notes..." 
+              <textarea
+                className="form-input"
+                style={{ minHeight: '50px', padding: '6px' }}
+                value={overallComments}
+                onChange={e => setOverallComments(e.target.value)}
+                placeholder="Enter any additional breakdown repair comments, root cause details, or notes..."
               />
             </div>
 
@@ -10590,12 +11063,12 @@ function MaintBreakdownModal({ onClose, onSubmit, employeeList, handleSearchEmpl
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div style={{ position: 'relative' }}>
                   <label>Checked By (Production SV Name & Sign) *</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    required 
-                    value={checkedByProdSV} 
-                    onChange={(e) => { setCheckedByProdSV(e.target.value); handleSearchEmployees(e.target.value, 'breakdownCheckedProdSV'); }} 
+                  <input
+                    type="text"
+                    className="form-input"
+                    required
+                    value={checkedByProdSV}
+                    onChange={(e) => { setCheckedByProdSV(e.target.value); handleSearchEmployees(e.target.value, 'breakdownCheckedProdSV'); }}
                   />
                   {showEmployeeDropdown && activeSearchField === 'breakdownCheckedProdSV' && (
                     <div className="autocomplete-dropdown">
@@ -10609,12 +11082,12 @@ function MaintBreakdownModal({ onClose, onSubmit, employeeList, handleSearchEmpl
                 </div>
                 <div style={{ position: 'relative' }}>
                   <label>Approved By (FM Name & Sign) *</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    required 
-                    value={approvedByProdFM} 
-                    onChange={(e) => { setApprovedByProdFM(e.target.value); handleSearchEmployees(e.target.value, 'breakdownApprovedProdFM'); }} 
+                  <input
+                    type="text"
+                    className="form-input"
+                    required
+                    value={approvedByProdFM}
+                    onChange={(e) => { setApprovedByProdFM(e.target.value); handleSearchEmployees(e.target.value, 'breakdownApprovedProdFM'); }}
                   />
                   {showEmployeeDropdown && activeSearchField === 'breakdownApprovedProdFM' && (
                     <div className="autocomplete-dropdown">
@@ -10642,9 +11115,9 @@ function MaintBreakdownModal({ onClose, onSubmit, employeeList, handleSearchEmpl
 
 const convertNumberToWords = (num) => {
   if (num === null || num === undefined || isNaN(num)) return '';
-  
-  const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 
-                'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+
+  const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
+    'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
   const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
   const scales = ['', 'Thousand', 'Million', 'Billion'];
 
@@ -10745,12 +11218,12 @@ function SalesInvoiceFormModal({ onClose, onSubmit, products, initialData = null
     const rate = await frappe.getItemPrice(selectedItem.code);
     const updated = items.map((item, i) => {
       if (i === idx) {
-        return { 
-          ...item, 
-          item_code: selectedItem.code, 
+        return {
+          ...item,
+          item_code: selectedItem.code,
           item_name: selectedItem.name,
           unit: selectedItem.unit || 'Nos',
-          rate: rate 
+          rate: rate
         };
       }
       return item;
@@ -10810,21 +11283,21 @@ function SalesInvoiceFormModal({ onClose, onSubmit, products, initialData = null
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
               <div style={{ position: 'relative' }}>
                 <label className="input-label">Customer Name *</label>
-                <input 
-                  type="text" 
-                  className="text-input" 
-                  required 
-                  value={customerSearch} 
-                  onChange={e => { setCustomerSearch(e.target.value); setCustomer(e.target.value); setShowCustDropdown(true); }} 
+                <input
+                  type="text"
+                  className="text-input"
+                  required
+                  value={customerSearch}
+                  onChange={e => { setCustomerSearch(e.target.value); setCustomer(e.target.value); setShowCustDropdown(true); }}
                   onFocus={() => setShowCustDropdown(true)}
-                  placeholder="Search Customer..." 
+                  placeholder="Search Customer..."
                 />
                 {showCustDropdown && customerList.length > 0 && (
                   <div className="autocomplete-dropdown" style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100, maxHeight: '150px', overflowY: 'auto', backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
                     {customerList.map(c => (
-                      <div 
-                        key={c.name} 
-                        className="dropdown-item" 
+                      <div
+                        key={c.name}
+                        className="dropdown-item"
                         style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', color: '#111' }}
                         onClick={() => { setCustomerSearch(c.customer_name); setCustomer(c.customer_name); setShowCustDropdown(false); }}
                       >
@@ -10863,9 +11336,9 @@ function SalesInvoiceFormModal({ onClose, onSubmit, products, initialData = null
                 {items.map((item, idx) => (
                   <tr key={idx}>
                     <td style={{ position: 'relative' }}>
-                      <input 
-                        type="text" 
-                        className="text-input" 
+                      <input
+                        type="text"
+                        className="text-input"
                         style={{ padding: '4px' }}
                         required
                         placeholder="Search Item..."
@@ -10876,9 +11349,9 @@ function SalesInvoiceFormModal({ onClose, onSubmit, products, initialData = null
                       {activeItemRow === idx && itemSuggestions[idx] && itemSuggestions[idx].length > 0 && (
                         <div className="autocomplete-dropdown" style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100, maxHeight: '150px', overflowY: 'auto', backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
                           {itemSuggestions[idx].map(p => (
-                            <div 
-                              key={p.code} 
-                              className="dropdown-item" 
+                            <div
+                              key={p.code}
+                              className="dropdown-item"
                               style={{ padding: '6px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', fontSize: '11px', color: '#111' }}
                               onClick={() => selectItem(idx, p)}
                             >
@@ -10889,25 +11362,25 @@ function SalesInvoiceFormModal({ onClose, onSubmit, products, initialData = null
                       )}
                     </td>
                     <td>
-                      <input 
-                        type="number" 
-                        className="text-input" 
-                        style={{ padding: '4px', textAlign: 'center' }} 
-                        required 
+                      <input
+                        type="number"
+                        className="text-input"
+                        style={{ padding: '4px', textAlign: 'center' }}
+                        required
                         min="1"
-                        value={item.qty} 
+                        value={item.qty}
                         onChange={e => handleItemChange(idx, 'qty', parseInt(e.target.value) || 0)}
                       />
                     </td>
                     <td>
-                      <input 
-                        type="number" 
+                      <input
+                        type="number"
                         step="0.01"
-                        className="text-input" 
-                        style={{ padding: '4px', textAlign: 'right' }} 
-                        required 
+                        className="text-input"
+                        style={{ padding: '4px', textAlign: 'right' }}
+                        required
                         min="0"
-                        value={item.rate} 
+                        value={item.rate}
                         onChange={e => handleItemChange(idx, 'rate', parseFloat(e.target.value) || 0.0)}
                       />
                     </td>
@@ -10984,9 +11457,9 @@ function DeliveryNoteFormModal({ onClose, onSubmit, products, initialData = null
   const selectItem = (idx, selectedItem) => {
     const updated = items.map((item, i) => {
       if (i === idx) {
-        return { 
-          ...item, 
-          item_code: selectedItem.code, 
+        return {
+          ...item,
+          item_code: selectedItem.code,
           item_name: selectedItem.name,
           unit: selectedItem.unit || 'Nos'
         };
@@ -11066,21 +11539,21 @@ function DeliveryNoteFormModal({ onClose, onSubmit, products, initialData = null
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div style={{ position: 'relative' }}>
                 <label className="input-label">Customer Name *</label>
-                <input 
-                  type="text" 
-                  className="text-input" 
-                  required 
-                  value={customerSearch} 
-                  onChange={e => { setCustomerSearch(e.target.value); setCustomer(e.target.value); setShowCustDropdown(true); }} 
+                <input
+                  type="text"
+                  className="text-input"
+                  required
+                  value={customerSearch}
+                  onChange={e => { setCustomerSearch(e.target.value); setCustomer(e.target.value); setShowCustDropdown(true); }}
                   onFocus={() => setShowCustDropdown(true)}
-                  placeholder="Search Customer..." 
+                  placeholder="Search Customer..."
                 />
                 {showCustDropdown && customerList.length > 0 && (
                   <div className="autocomplete-dropdown" style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100, maxHeight: '150px', overflowY: 'auto', backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
                     {customerList.map(c => (
-                      <div 
-                        key={c.name} 
-                        className="dropdown-item" 
+                      <div
+                        key={c.name}
+                        className="dropdown-item"
                         style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', color: '#111' }}
                         onClick={() => { setCustomerSearch(c.customer_name); setCustomer(c.customer_name); setShowCustDropdown(false); }}
                       >
@@ -11114,9 +11587,9 @@ function DeliveryNoteFormModal({ onClose, onSubmit, products, initialData = null
                 {items.map((item, idx) => (
                   <tr key={idx}>
                     <td style={{ position: 'relative' }}>
-                      <input 
-                        type="text" 
-                        className="text-input" 
+                      <input
+                        type="text"
+                        className="text-input"
                         style={{ padding: '4px' }}
                         required
                         placeholder="Search Item..."
@@ -11127,9 +11600,9 @@ function DeliveryNoteFormModal({ onClose, onSubmit, products, initialData = null
                       {activeItemRow === idx && itemSuggestions[idx] && itemSuggestions[idx].length > 0 && (
                         <div className="autocomplete-dropdown" style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100, maxHeight: '150px', overflowY: 'auto', backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
                           {itemSuggestions[idx].map(p => (
-                            <div 
-                              key={p.code} 
-                              className="dropdown-item" 
+                            <div
+                              key={p.code}
+                              className="dropdown-item"
                               style={{ padding: '6px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', fontSize: '11px', color: '#111' }}
                               onClick={() => selectItem(idx, p)}
                             >
@@ -11140,22 +11613,22 @@ function DeliveryNoteFormModal({ onClose, onSubmit, products, initialData = null
                       )}
                     </td>
                     <td>
-                      <input 
-                        type="number" 
-                        className="text-input" 
-                        style={{ padding: '4px', textAlign: 'center' }} 
-                        required 
+                      <input
+                        type="number"
+                        className="text-input"
+                        style={{ padding: '4px', textAlign: 'center' }}
+                        required
                         min="1"
-                        value={item.qty} 
+                        value={item.qty}
                         onChange={e => handleItemChange(idx, 'qty', parseInt(e.target.value) || 0)}
                       />
                     </td>
                     <td style={{ position: 'relative' }}>
-                      <input 
-                        type="text" 
-                        className="text-input" 
-                        style={{ padding: '4px' }} 
-                        required 
+                      <input
+                        type="text"
+                        className="text-input"
+                        style={{ padding: '4px' }}
+                        required
                         placeholder="Search Warehouse..."
                         value={whSearchText[idx] !== undefined ? whSearchText[idx] : item.warehouse}
                         onChange={e => handleSearchWh(idx, e.target.value)}
@@ -11164,9 +11637,9 @@ function DeliveryNoteFormModal({ onClose, onSubmit, products, initialData = null
                       {activeWhRow === idx && whSuggestions[idx] && whSuggestions[idx].length > 0 && (
                         <div className="autocomplete-dropdown" style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100, maxHeight: '150px', overflowY: 'auto', backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
                           {whSuggestions[idx].map(w => (
-                            <div 
-                              key={w.name} 
-                              className="dropdown-item" 
+                            <div
+                              key={w.name}
+                              className="dropdown-item"
                               style={{ padding: '6px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', fontSize: '11px', color: '#111' }}
                               onClick={() => selectWh(idx, w)}
                             >
@@ -11206,11 +11679,11 @@ function CleaningFormModal({ templateId, onClose, onSubmit, employeeList, handle
   const template = CLEANING_TEMPLATES.find(t => t.id === templateId);
   const [postingDate, setPostingDate] = useState(new Date().toISOString().slice(0, 10));
   const [postingTime, setPostingTime] = useState(new Date().toTimeString().slice(0, 5));
-  
+
   // Cleaner / Checker autocomplete
   const [cleanerSearch, setCleanerSearch] = useState('');
   const [cleaner, setCleaner] = useState('');
-  
+
   // Supervisor autocomplete
   const [supervisorSearch, setSupervisorSearch] = useState('');
   const [supervisor, setSupervisor] = useState('');
@@ -11315,24 +11788,24 @@ function CleaningFormModal({ templateId, onClose, onSubmit, employeeList, handle
             <div className="form-group" style={{ position: 'relative' }}>
               <label className="input-label">
                 {templateId === 'incubator-temp' ? 'Recorded By (Analyst/Chemist) *' :
-                 templateId === 'balance-calib' ? 'Checked By (Officer/Tech) *' :
-                 templateId === 'sanitation' ? 'Performed By (Operator) *' : 'Cleaner Name *'}
+                  templateId === 'balance-calib' ? 'Checked By (Officer/Tech) *' :
+                    templateId === 'sanitation' ? 'Performed By (Operator) *' : 'Cleaner Name *'}
               </label>
-              <input 
-                type="text" 
-                className="text-input" 
-                required 
+              <input
+                type="text"
+                className="text-input"
+                required
                 placeholder="Search employee..."
-                value={cleanerSearch} 
+                value={cleanerSearch}
                 onChange={e => { setCleanerSearch(e.target.value); setCleaner(e.target.value); handleSearchEmployees(e.target.value, 'cleaner'); setShowEmployeeDropdown(true); }}
                 onFocus={() => { setActiveSearchField('cleaner'); setShowEmployeeDropdown(true); }}
               />
               {showEmployeeDropdown && activeSearchField === 'cleaner' && employeeList.length > 0 && (
                 <div className="autocomplete-dropdown" style={{ position: 'absolute', bottom: '100%', left: 0, right: 0, zIndex: 100, maxHeight: '130px', overflowY: 'auto', backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px' }}>
                   {employeeList.map(emp => (
-                    <div 
-                      key={emp.name} 
-                      className="dropdown-item" 
+                    <div
+                      key={emp.name}
+                      className="dropdown-item"
                       style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', color: '#111' }}
                       onClick={() => { setCleanerSearch(emp.employee_name); setCleaner(emp.employee_name); setShowEmployeeDropdown(false); }}
                     >
@@ -11347,20 +11820,20 @@ function CleaningFormModal({ templateId, onClose, onSubmit, employeeList, handle
             {['toilet-clean', 'dining-clean', 'floor-clean', 'lab-office-clean', 'sanitation'].includes(templateId) && (
               <div className="form-group" style={{ position: 'relative' }}>
                 <label className="input-label">Verified By (Supervisor)</label>
-                <input 
-                  type="text" 
-                  className="text-input" 
+                <input
+                  type="text"
+                  className="text-input"
                   placeholder="Search employee..."
-                  value={supervisorSearch} 
+                  value={supervisorSearch}
                   onChange={e => { setSupervisorSearch(e.target.value); setSupervisor(e.target.value); handleSearchEmployees(e.target.value, 'supervisor'); setShowEmployeeDropdown(true); }}
                   onFocus={() => { setActiveSearchField('supervisor'); setShowEmployeeDropdown(true); }}
                 />
                 {showEmployeeDropdown && activeSearchField === 'supervisor' && employeeList.length > 0 && (
                   <div className="autocomplete-dropdown" style={{ position: 'absolute', bottom: '100%', left: 0, right: 0, zIndex: 100, maxHeight: '130px', overflowY: 'auto', backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px' }}>
                     {employeeList.map(emp => (
-                      <div 
-                        key={emp.name} 
-                        className="dropdown-item" 
+                      <div
+                        key={emp.name}
+                        className="dropdown-item"
                         style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0', color: '#111' }}
                         onClick={() => { setSupervisorSearch(emp.employee_name); setSupervisor(emp.employee_name); setShowEmployeeDropdown(false); }}
                       >
@@ -11583,13 +12056,13 @@ function CleaningFormModal({ templateId, onClose, onSubmit, employeeList, handle
                 </div>
                 <div className="form-group">
                   <label className="input-label">Calibration Verification</label>
-                  <div className="form-input" style={{ 
-                    backgroundColor: formData.status === 'Pass' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)', 
+                  <div className="form-input" style={{
+                    backgroundColor: formData.status === 'Pass' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
                     color: formData.status === 'Pass' ? 'var(--success)' : 'var(--danger)',
                     fontWeight: '700',
-                    height: '36px', 
-                    display: 'flex', 
-                    alignItems: 'center', 
+                    height: '36px',
+                    display: 'flex',
+                    alignItems: 'center',
                     padding: '0 12px',
                     borderRadius: '6px',
                     border: '1px solid var(--border-color)'
@@ -11682,8 +12155,8 @@ function CleaningRecordDetailModal({ record, onClose }) {
             <div>
               <span style={{ color: 'var(--text-muted)' }}>
                 {record.type === 'Incubator Temperature Record' ? 'Recorded By:' :
-                 record.type === 'Balance Check or Callibration' ? 'Checked By:' :
-                 record.type === 'Sanitation' ? 'Performed By:' : 'Cleaner Name:'}
+                  record.type === 'Balance Check or Callibration' ? 'Checked By:' :
+                    record.type === 'Sanitation' ? 'Performed By:' : 'Cleaner Name:'}
               </span><br />
               <strong>{record.cleaner || record.recorded_by || record.checked_by || record.performed_by || 'N/A'}</strong>
             </div>
