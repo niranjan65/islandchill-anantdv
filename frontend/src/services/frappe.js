@@ -46,6 +46,98 @@ class FrappeService {
     return '';
   }
 
+  cleanFrappeError(value) {
+    let message = value || 'ERPNext request failed';
+
+    if (Array.isArray(message)) {
+      message = message.join(' ');
+    }
+
+    if (typeof message !== 'string') {
+      try {
+        message = JSON.stringify(message);
+      } catch {
+        message = String(message);
+      }
+    }
+
+    try {
+      const parsed = JSON.parse(message);
+      if (Array.isArray(parsed)) {
+        message = parsed.map(item => {
+          if (typeof item === 'string') return item;
+          return item.message || item.title || JSON.stringify(item);
+        }).join(' ');
+      } else if (parsed?.message) {
+        message = parsed.message;
+      }
+    } catch {
+      // Not JSON, continue.
+    }
+
+    return String(message)
+      .replace(/<a\b[^>]*>(.*?)<\/a>/gi, '$1')
+      .replace(/<strong\b[^>]*>(.*?)<\/strong>/gi, '$1')
+      .replace(/<[^>]*>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  async callIslandChillMethod(methodName, payload = {}) {
+    if (!this.connection.isLive) return { success: true, localOnly: true };
+
+    const baseUrl = this.resolveUrl(this.connection.url);
+    const auth = this.getAuthHeader();
+
+    const headers = {
+      Accept: 'application/json',
+      'Content-Type': 'application/json'
+    };
+
+    if (auth) {
+      headers.Authorization = auth;
+    } else {
+      const csrfToken =
+        window.csrf_token ||
+        window.frappe?.csrf_token ||
+        document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+
+      if (csrfToken) {
+        headers['X-Frappe-CSRF-Token'] = csrfToken;
+        headers['X-CSRF-Token'] = csrfToken;
+      }
+    }
+
+    const response = await fetch(`${baseUrl}/api/method/islandchill.api.manufacturing.${methodName}`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(payload)
+    });
+
+    const json = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      const rawMessage =
+        json?._server_messages ||
+        json?.exception ||
+        json?.exc ||
+        json?.message ||
+        response.statusText ||
+        'ERPNext request failed';
+
+      throw new Error(this.cleanFrappeError(rawMessage));
+    }
+
+    return json?.message || json;
+  }
+
   async login(url, usernameOrKey, passwordOrSecret, isLive = false) {
     if (!isLive) {
       const mockSettings = { isLive: false, url: CONFIG.ERPNEXT_SERVER_URL, apiKey: '', apiSecret: '', username: '', password: '', connected: true, user: 'Alex Morgan', role: 'System Administrator' };
@@ -171,7 +263,7 @@ class FrappeService {
         const errData = await response.json();
         message = errData.exception || errData.message || errData._server_messages || message;
       } catch {}
-      throw new Error(message);
+      throw new Error(this.cleanFrappeError(message));
     }
 
     const res = await response.json();
@@ -226,7 +318,7 @@ class FrappeService {
           errData.message ||
           message;
       } catch {}
-      throw new Error(message);
+      throw new Error(this.cleanFrappeError(message));
     }
 
     return await response.json();
@@ -363,7 +455,7 @@ class FrappeService {
         const err = await response.json();
         message = err.exception || err.message || err._server_messages || message;
       } catch {}
-      throw new Error(message);
+      throw new Error(this.cleanFrappeError(message));
     }
 
     const json = await response.json();
@@ -416,7 +508,7 @@ class FrappeService {
         const err = await response.json();
         message = err.exception || err.message || err._server_messages || message;
       } catch {}
-      throw new Error(message);
+      throw new Error(this.cleanFrappeError(message));
     }
 
     const json = await response.json();
@@ -461,7 +553,7 @@ class FrappeService {
         const err = await response.json();
         message = err.exception || err.message || err._server_messages || message;
       } catch {}
-      throw new Error(message);
+      throw new Error(this.cleanFrappeError(message));
     }
 
     const json = await response.json();
@@ -722,6 +814,81 @@ class FrappeService {
   }
 
 
+
+  async startJobCard(jobCardId, { employee, remarks = '', actualStartTime = '' } = {}) {
+    return this.callIslandChillMethod('start_job_card', {
+      job_card: jobCardId,
+      employee,
+      remarks,
+      actual_start_time: actualStartTime
+    });
+  }
+
+  async pauseJobCard(jobCardId, { remarks = '', actualEndTime = '' } = {}) {
+    // ERPNext pause uses the employees already stored on the Job Card/time_logs.
+    // Do not pass employee here.
+    return this.callIslandChillMethod('pause_job_card', {
+      job_card: jobCardId,
+      remarks,
+      actual_end_time: actualEndTime
+    });
+  }
+
+  async resumeJobCard(jobCardId, { remarks = '', actualStartTime = '' } = {}) {
+    // ERPNext resume uses the existing Job Card employee table and adds a new time_log row.
+    // Do not pass employee here.
+    return this.callIslandChillMethod('resume_job_card', {
+      job_card: jobCardId,
+      remarks,
+      actual_start_time: actualStartTime
+    });
+  }
+
+  async submitJobCard(jobCardId, { remarks = '', actualEndTime = '', qty = null, forQuantity = null, looseQty = 0, processLossQty = 0 } = {}) {
+    // ERPNext completion closes the active time log, fills completed_qty, and submits.
+    return this.callIslandChillMethod('submit_job_card', {
+      job_card: jobCardId,
+      remarks,
+      actual_end_time: actualEndTime,
+      qty,
+      for_quantity: forQuantity,
+      loose_qty: looseQty,
+      process_loss_qty: processLossQty
+    });
+  }
+
+  async finishWorkOrder(workOrderId, { qty = null, processLossQty = null, submit = 1 } = {}) {
+    return this.callIslandChillMethod('finish_work_order', {
+      work_order: workOrderId,
+      qty,
+      process_loss_qty: processLossQty,
+      submit
+    });
+  }
+
+  async changeWorkOrderStatus(workOrderId, status) {
+    return this.callIslandChillMethod('change_work_order_status', {
+      work_order: workOrderId,
+      status
+    });
+  }
+
+
+  async addJobCardComment(jobCardId, content, operator = '') {
+    return this.callIslandChillMethod('add_job_card_comment', {
+      job_card: jobCardId,
+      content,
+      operator
+    });
+  }
+
+  async getJobCardComments(jobCardId) {
+    const res = await this.callIslandChillMethod('get_job_card_comments', {
+      job_card: jobCardId
+    });
+    return res?.comments || [];
+  }
+
   async forceWorkOrderInProgress(workOrder) {
     const baseUrl = this.resolveUrl(this.connection.url);
 
@@ -978,7 +1145,7 @@ class FrappeService {
     if (this.connection.isLive) {
       try {
         const res = await this.fetchERP('Job Card', {
-          fields: ['name', 'operation', 'workstation', 'status', 'remarks', 'for_quantity'],
+          fields: ['name', 'operation', 'workstation', 'status', 'remarks', 'for_quantity', 'total_completed_qty', 'is_paused'],
           filters: [
             ['work_order', '=', workOrderId]
           ],
@@ -986,11 +1153,27 @@ class FrappeService {
         });
 
         if (res && res.length > 0) {
-          return res.map(jc => {
+          return await Promise.all(res.map(async (jc) => {
             // Keep ERPNext Job Card status names in the frontend.
             // ERPNext valid statuses include: Open, Work In Progress, Material Transferred, On Hold, Submitted, Cancelled, Completed.
             let appStatus = jc.status || 'Open';
             if (appStatus === 'Work in Progress') appStatus = 'Work In Progress';
+
+            let remarksList = [];
+            try {
+              const comments = await this.getJobCardComments(jc.name);
+              remarksList = (comments || []).map((c) => ({
+                timestamp: c.creation ? String(c.creation).replace('T', ' ').substring(0, 19) : '',
+                operator: c.owner || 'ERPNext User',
+                text: this.cleanFrappeError(c.content || '')
+              })).filter(r => r.text);
+            } catch (commentErr) {
+              console.warn(`Failed to load comments for Job Card ${jc.name}:`, commentErr);
+            }
+
+            if (remarksList.length === 0 && jc.remarks) {
+              remarksList = [{ timestamp: '', operator: 'System', text: jc.remarks }];
+            }
 
             return {
               id: jc.name,
@@ -999,9 +1182,12 @@ class FrappeService {
               status: appStatus,
               operator: '', 
               remarks: jc.remarks || '',
-              remarksList: jc.remarks ? [{ timestamp: '', operator: 'System', text: jc.remarks }] : []
+              forQuantity: Number(jc.for_quantity || 0),
+              totalCompletedQty: Number(jc.total_completed_qty || 0),
+              is_paused: jc.is_paused || 0,
+              remarksList
             };
-          });
+          }));
         }
       } catch (e) {
         console.error(`Failed to fetch Job Cards for Work Order ${workOrderId}:`, e);

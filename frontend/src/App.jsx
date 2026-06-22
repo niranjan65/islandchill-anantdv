@@ -597,12 +597,19 @@ function App() {
   // Modal states for job card completion
   const [activeJCOp, setActiveJCOp] = useState(null); // { woId, jcId, operation, action: 'pause' | 'finish' | 'remark' }
   const [operatorName, setOperatorName] = useState('');
+  const [operatorEmployeeId, setOperatorEmployeeId] = useState('');
   const [operatorRemarks, setOperatorRemarks] = useState('');
   const [activeTimelineJC, setActiveTimelineJC] = useState(null); // { woId, jcId, operation, remarksList }
 
   // Job Card actual start/end time states
   const [jcActualStartTime, setJcActualStartTime] = useState('');
   const [jcActualEndTime, setJcActualEndTime] = useState('');
+
+  // Job Card completion quantity states
+  const [jcFinishForQuantity, setJcFinishForQuantity] = useState('');
+  const [jcFinishCompletedQty, setJcFinishCompletedQty] = useState('');
+  const [jcFinishProcessLossQty, setJcFinishProcessLossQty] = useState('');
+  const [woActionLoading, setWoActionLoading] = useState(false);
 
   // Sales section states
   const [salesSubTab, setSalesSubTab] = useState('invoice'); // 'invoice' | 'delivery'
@@ -666,6 +673,9 @@ function App() {
       // local states managed inside sub-component modals
     } else {
       setOperatorName(query);
+      if (field === 'pauseModal' || field === 'remarksModal') {
+        setOperatorEmployeeId('');
+      }
     }
 
     setActiveSearchField(field);
@@ -1892,234 +1902,431 @@ const handleSearchSeSource = async (idx, query) => {
     }).join('\n');
   };
 
+  const openJobCardAction = (wo, jc, action) => {
+    setOperatorName('');
+    setOperatorEmployeeId('');
+    setOperatorRemarks('');
+    setJcActualStartTime('');
+    setJcActualEndTime('');
+
+    if (action === 'finish') {
+      const forQty = Number(jc?.forQuantity || wo?.quantity || 0);
+      const existingCompleted = Number(jc?.totalCompletedQty || 0);
+      const completedQty = existingCompleted > 0 ? existingCompleted : forQty;
+      const processLossQty = Math.max(0, forQty - completedQty);
+
+      setJcFinishForQuantity(String(forQty || ''));
+      setJcFinishCompletedQty(String(completedQty || ''));
+      setJcFinishProcessLossQty(String(Number(processLossQty.toFixed(6)) || 0));
+    } else {
+      setJcFinishForQuantity('');
+      setJcFinishCompletedQty('');
+      setJcFinishProcessLossQty('');
+    }
+
+    setActiveJCOp({
+      woId: wo.id,
+      jcId: jc.id,
+      operation: jc.operation,
+      action
+    });
+  };
+
+  const isWorkOrderReadyForFinish = (wo) => {
+    if (!wo || ['Completed', 'Closed', 'Cancelled', 'Stopped'].includes(wo.status)) return false;
+    if (!wo.jobCards || wo.jobCards.length === 0) return false;
+    return wo.jobCards.every(jc => jc.status === 'Completed');
+  };
+
+  const handleFinishWorkOrder = async (wo) => {
+    if (!wo) return;
+    if (!isWorkOrderReadyForFinish(wo)) {
+      showAlert('All Job Cards must be completed before finishing the Work Order.', 'warning', 'Work Order Not Ready');
+      return;
+    }
+
+    if (!window.confirm(`Create and submit Manufacture Stock Entry for Work Order ${wo.id}?`)) return;
+
+    setWoActionLoading(true);
+    try {
+      const res = await frappe.finishWorkOrder(wo.id, { submit: 1 });
+      if (!res || res.success === false) {
+        throw new Error(res?.error || 'Failed to finish Work Order');
+      }
+
+      showAlert(`Work Order ${wo.id} finished. Manufacture Stock Entry ${res.stock_entry || ''} created/submitted.`, 'success', 'Work Order Finished');
+      await loadWorkOrders();
+    } catch (err) {
+      showAlert(`Failed to finish Work Order: ${err.message}`, 'error', 'ERPNext Error');
+    } finally {
+      setWoActionLoading(false);
+    }
+  };
+
+  const handleChangeWorkOrderStatus = async (wo, status) => {
+    if (!wo) return;
+    const label = status === 'Resumed' ? 'Re-open' : status;
+    if (!window.confirm(`${label} Work Order ${wo.id}?`)) return;
+
+    setWoActionLoading(true);
+    try {
+      const res = await frappe.changeWorkOrderStatus(wo.id, status);
+      if (!res || res.success === false) {
+        throw new Error(res?.error || `Failed to update Work Order to ${status}`);
+      }
+
+      showAlert(`Work Order ${wo.id} updated to ${res.status || status}.`, 'success', 'Work Order Updated');
+      await loadWorkOrders();
+    } catch (err) {
+      showAlert(`Failed to update Work Order: ${err.message}`, 'error', 'ERPNext Error');
+    } finally {
+      setWoActionLoading(false);
+    }
+  };
+
   // Job Card State modifiers (Start, Pause, Resume, Finish, Add Remarks)
-  const handleStartJobCard = async (woId, jcId) => {
+  const handleStartJobCard = async (woId, jcId, operator, employeeId, remarksText = '') => {
+    const cleanOp = (operator || '').trim();
+    const cleanEmployeeId = (employeeId || '').trim();
+
+    if (!cleanOp || !cleanEmployeeId) {
+      showAlert('Please select a valid Employee from the dropdown before starting the Job Card.', 'warning', 'Employee Required');
+      return;
+    }
+
     const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-    const log = { timestamp, operator: currentUser, text: 'Job started.' };
+    const cleanRemarks = remarksText || 'Job started.';
+    const log = {
+      timestamp,
+      operator: cleanOp,
+      employeeId: cleanEmployeeId,
+      text: `Started: ${cleanRemarks}`,
+      actualStartTime: jcActualStartTime
+    };
 
-    let finalRemarks = '';
-
-    // Optimistic UI update
-    setWorkOrders(prevWOs => prevWOs.map(wo => {
-      if (wo.id !== woId) return wo;
-
-      const updatedJobCards = wo.jobCards.map(jc => {
-        if (jc.id === jcId) {
-          const updatedRemarksList = [...(jc.remarksList || []), log];
-          finalRemarks = formatRemarksList(updatedRemarksList);
-          return {
-            ...jc,
-            status: 'Work In Progress',
-            operator: currentUser,
-            remarksList: updatedRemarksList,
-            remarks: finalRemarks
-          };
-        }
-        return jc;
-      });
-
-      return {
-        ...wo,
-        status: 'In Process',
-        jobCards: updatedJobCards
-      };
-    }));
+    const targetWO = workOrders.find(wo => wo.id === woId);
+    const targetJC = targetWO?.jobCards?.find(jc => jc.id === jcId);
+    const finalRemarks = formatRemarksList([...(targetJC?.remarksList || []), log]);
 
     try {
       const conn = frappe.getConnectionSettings();
 
       if (conn.isLive && conn.connected) {
-        const jcRes = await frappe.syncJobCardToERP(jcId, 'Work In Progress', finalRemarks);
+        const jcRes = await frappe.startJobCard(jcId, {
+          employee: cleanEmployeeId,
+          remarks: finalRemarks,
+          actualStartTime: jcActualStartTime
+        });
 
         if (!jcRes || jcRes.success === false) {
           throw new Error(jcRes?.error || 'Failed to start Job Card in ERPNext');
         }
 
-        // Make ERPNext Work Order list match the shop-floor status.
         await frappe.forceWorkOrderInProgress(woId);
-
-        // Reload from ERPNext so frontend does not show fake local-only status.
         await loadWorkOrders();
+      } else {
+        setWorkOrders(prevWOs => prevWOs.map(wo => {
+          if (wo.id !== woId) return wo;
+
+          const updatedJobCards = wo.jobCards.map(jc => {
+            if (jc.id === jcId) {
+              const updatedRemarksList = [...(jc.remarksList || []), log];
+              return {
+                ...jc,
+                status: 'Work In Progress',
+                operator: cleanOp,
+                employeeId: cleanEmployeeId,
+                remarksList: updatedRemarksList,
+                remarks: formatRemarksList(updatedRemarksList),
+                actualStartTime: jcActualStartTime || jc.actualStartTime
+              };
+            }
+            return jc;
+          });
+
+          return {
+            ...wo,
+            status: 'In Process',
+            jobCards: updatedJobCards
+          };
+        }));
       }
+
+      setActiveJCOp(null);
+      setOperatorName('');
+      setOperatorEmployeeId('');
+      setOperatorRemarks('');
+      setJcActualStartTime('');
+      setJcActualEndTime('');
     } catch (err) {
       showAlert(`Failed to start Job Card: ${err.message}`, 'error', 'ERPNext Error');
       loadWorkOrders();
     }
   };
 
-  const handlePauseJobCard = (woId, jcId, operator, remarksText) => {
+  const handlePauseJobCard = async (woId, jcId, operator, employeeId, remarksText) => {
+    // ERPNext pause does not need a new employee selection.
+    // It closes the currently open Job Card Time Log row and sets is_paused = 1.
+    const cleanOp = (operator || currentUser || 'Operator').trim();
     const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-    const cleanOp = operator || currentUser;
     const cleanRemarks = remarksText || 'Operation paused.';
     const log = {
       timestamp,
       operator: cleanOp,
       text: `Paused: ${cleanRemarks}`,
-      actualStartTime: jcActualStartTime,
       actualEndTime: jcActualEndTime
     };
 
-    let finalRemarks = '';
-    setWorkOrders(prevWOs => prevWOs.map(wo => {
-      if (wo.id !== woId) return wo;
+    const targetWO = workOrders.find(wo => wo.id === woId);
+    const targetJC = targetWO?.jobCards?.find(jc => jc.id === jcId);
+    const finalRemarks = formatRemarksList([...(targetJC?.remarksList || []), log]);
 
-      const updatedJobCards = wo.jobCards.map(jc => {
-        if (jc.id === jcId) {
-          const updatedRemarksList = [...(jc.remarksList || []), log];
-          finalRemarks = formatRemarksList(updatedRemarksList);
-          return {
-            ...jc,
-            status: 'On Hold',
-            operator: cleanOp,
-            remarksList: updatedRemarksList,
-            remarks: finalRemarks,
-            actualStartTime: jcActualStartTime || jc.actualStartTime,
-            actualEndTime: jcActualEndTime || jc.actualEndTime
-          };
+    try {
+      const conn = frappe.getConnectionSettings();
+
+      if (conn.isLive && conn.connected) {
+        const jcRes = await frappe.pauseJobCard(jcId, {
+          remarks: finalRemarks,
+          actualEndTime: jcActualEndTime
+        });
+
+        if (!jcRes || jcRes.success === false) {
+          throw new Error(jcRes?.error || 'Failed to pause Job Card in ERPNext');
         }
-        return jc;
-      });
 
-      return { ...wo, jobCards: updatedJobCards };
-    }));
+        await loadWorkOrders();
+      } else {
+        setWorkOrders(prevWOs => prevWOs.map(wo => {
+          if (wo.id !== woId) return wo;
 
-    frappe.syncJobCardToERP(jcId, 'On Hold', finalRemarks);
-    setActiveJCOp(null);
-    setOperatorName('');
-    setOperatorRemarks('');
-    setJcActualStartTime('');
-    setJcActualEndTime('');
+          const updatedJobCards = wo.jobCards.map(jc => {
+            if (jc.id === jcId) {
+              const updatedRemarksList = [...(jc.remarksList || []), log];
+              return {
+                ...jc,
+                status: 'On Hold',
+                is_paused: 1,
+                operator: cleanOp,
+                remarksList: updatedRemarksList,
+                remarks: formatRemarksList(updatedRemarksList),
+                actualEndTime: jcActualEndTime || jc.actualEndTime
+              };
+            }
+            return jc;
+          });
+
+          return { ...wo, jobCards: updatedJobCards };
+        }));
+      }
+
+      setActiveJCOp(null);
+      setOperatorName('');
+      setOperatorEmployeeId('');
+      setOperatorRemarks('');
+      setJcActualStartTime('');
+      setJcActualEndTime('');
+    } catch (err) {
+      showAlert(`Failed to pause Job Card: ${err.message}`, 'error', 'ERPNext Error');
+      loadWorkOrders();
+    }
   };
 
-  const handleResumeJobCard = (woId, jcId) => {
+  const handleResumeJobCard = async (woId, jcId, operator, employeeId, remarksText = '') => {
+    // ERPNext resume does not need a new employee selection.
+    // It uses the existing Job Card employee table and adds a new Time Log row.
+    const cleanOp = (operator || currentUser || 'Operator').trim();
     const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-    const log = { timestamp, operator: currentUser, text: 'Job resumed.' };
+    const cleanRemarks = remarksText || 'Job resumed.';
+    const log = {
+      timestamp,
+      operator: cleanOp,
+      text: `Resumed: ${cleanRemarks}`,
+      actualStartTime: jcActualStartTime
+    };
 
-    let finalRemarks = '';
-    setWorkOrders(prevWOs => prevWOs.map(wo => {
-      if (wo.id !== woId) return wo;
+    const targetWO = workOrders.find(wo => wo.id === woId);
+    const targetJC = targetWO?.jobCards?.find(jc => jc.id === jcId);
+    const finalRemarks = formatRemarksList([...(targetJC?.remarksList || []), log]);
 
-      const updatedJobCards = wo.jobCards.map(jc => {
-        if (jc.id === jcId) {
-          const updatedRemarksList = [...(jc.remarksList || []), log];
-          finalRemarks = formatRemarksList(updatedRemarksList);
-          return {
-            ...jc,
-            status: 'Work In Progress',
-            operator: currentUser,
-            remarksList: updatedRemarksList,
-            remarks: finalRemarks
-          };
+    try {
+      const conn = frappe.getConnectionSettings();
+
+      if (conn.isLive && conn.connected) {
+        const jcRes = await frappe.resumeJobCard(jcId, {
+          remarks: finalRemarks,
+          actualStartTime: jcActualStartTime
+        });
+
+        if (!jcRes || jcRes.success === false) {
+          throw new Error(jcRes?.error || 'Failed to resume Job Card in ERPNext');
         }
-        return jc;
-      });
 
-      return { ...wo, jobCards: updatedJobCards };
-    }));
+        await loadWorkOrders();
+      } else {
+        setWorkOrders(prevWOs => prevWOs.map(wo => {
+          if (wo.id !== woId) return wo;
 
-    frappe.syncJobCardToERP(jcId, 'Work In Progress', finalRemarks);
+          const updatedJobCards = wo.jobCards.map(jc => {
+            if (jc.id === jcId) {
+              const updatedRemarksList = [...(jc.remarksList || []), log];
+              return {
+                ...jc,
+                status: 'Work In Progress',
+                is_paused: 0,
+                operator: cleanOp,
+                remarksList: updatedRemarksList,
+                remarks: formatRemarksList(updatedRemarksList),
+                actualStartTime: jcActualStartTime || jc.actualStartTime
+              };
+            }
+            return jc;
+          });
+
+          return { ...wo, jobCards: updatedJobCards };
+        }));
+      }
+
+      setActiveJCOp(null);
+      setOperatorName('');
+      setOperatorEmployeeId('');
+      setOperatorRemarks('');
+      setJcActualStartTime('');
+      setJcActualEndTime('');
+    } catch (err) {
+      showAlert(`Failed to resume Job Card: ${err.message}`, 'error', 'ERPNext Error');
+      loadWorkOrders();
+    }
   };
 
-  const handleFinishJobCard = (woId, jcId, operator, remarksText) => {
+  const handleFinishJobCard = async (woId, jcId, operator, employeeId, remarksText) => {
+    // ERPNext completion closes the active time log, calculates time_in_mins,
+    // fills completed_qty, submits the Job Card, and updates Work Order operation.
+    const cleanOp = (operator || currentUser || 'Operator').trim();
     const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-    const cleanOp = operator || currentUser;
     const cleanRemarks = remarksText || 'Operation finished.';
     const log = {
       timestamp,
       operator: cleanOp,
       text: `Finished: ${cleanRemarks}`,
-      actualStartTime: jcActualStartTime,
       actualEndTime: jcActualEndTime
     };
 
-    let finalRemarks = '';
-    setWorkOrders(prevWOs => {
-      return prevWOs.map(wo => {
-        if (wo.id !== woId) return wo;
+    const targetWO = workOrders.find(wo => wo.id === woId);
+    const targetJC = targetWO?.jobCards?.find(jc => jc.id === jcId);
+    const finalRemarks = formatRemarksList([...(targetJC?.remarksList || []), log]);
+    const forQty = Number(jcFinishForQuantity || targetJC?.forQuantity || targetWO?.quantity || 0);
+    const completedQty = Number(jcFinishCompletedQty || forQty || 0);
+    const processLossQty = Number(jcFinishProcessLossQty || Math.max(0, forQty - completedQty) || 0);
 
-        const updatedCards = wo.jobCards.map(jc => {
-          if (jc.id === jcId) {
-            const updatedRemarksList = [...(jc.remarksList || []), log];
-            finalRemarks = formatRemarksList(updatedRemarksList);
-            return {
-              ...jc,
-              status: 'Completed',
-              operator: cleanOp,
-              remarksList: updatedRemarksList,
-              remarks: finalRemarks,
-              actualStartTime: jcActualStartTime || jc.actualStartTime,
-              actualEndTime: jcActualEndTime || jc.actualEndTime
-            };
-          }
-          return jc;
+    if (!forQty || forQty <= 0) {
+      showAlert('Qty to Manufacture must be greater than 0.', 'warning', 'Invalid Quantity');
+      return;
+    }
+
+    if (completedQty < 0) {
+      showAlert('Total Completed Qty cannot be negative.', 'warning', 'Invalid Quantity');
+      return;
+    }
+
+    if ((completedQty + processLossQty) > forQty + 0.0001) {
+      showAlert('Total Completed Qty + Process Loss Qty cannot be greater than Qty to Manufacture.', 'warning', 'Invalid Quantity');
+      return;
+    }
+
+    try {
+      const conn = frappe.getConnectionSettings();
+
+      if (conn.isLive && conn.connected) {
+        const jcRes = await frappe.submitJobCard(jcId, {
+          remarks: finalRemarks,
+          actualEndTime: jcActualEndTime,
+          qty: completedQty,
+          forQuantity: forQty,
+          looseQty: 0,
+          processLossQty
         });
 
-        const completedCount = updatedCards.filter(jc => jc.status === 'Completed').length;
-        const isLastCard = completedCount === updatedCards.length;
-
-        const completedJC = wo.jobCards.find(jc => jc.id === jcId);
-
-        if (completedJC && completedJC.operation === 'Mixing') {
-          deductBOMResources(wo.bomNo, wo.quantity, 'Mixing');
+        if (!jcRes || jcRes.success === false) {
+          throw new Error(jcRes?.error || 'Failed to submit Job Card in ERPNext');
         }
 
-        if (completedJC && completedJC.operation === 'Can/Bottle Prep') {
-          deductBOMResources(wo.bomNo, wo.quantity, 'Can/Bottle Prep');
-        }
+        await loadWorkOrders();
+      } else {
+        setWorkOrders(prevWOs => prevWOs.map(wo => {
+          if (wo.id !== woId) return wo;
 
-        const finalStatus = isLastCard ? 'Completed' : 'In Process';
-        const producedCount = isLastCard ? wo.quantity : wo.produced;
+          const updatedCards = wo.jobCards.map(jc => {
+            if (jc.id === jcId) {
+              const updatedRemarksList = [...(jc.remarksList || []), log];
+              return {
+                ...jc,
+                status: 'Completed',
+                operator: cleanOp,
+                remarksList: updatedRemarksList,
+                remarks: formatRemarksList(updatedRemarksList),
+                actualEndTime: jcActualEndTime || jc.actualEndTime
+              };
+            }
+            return jc;
+          });
 
-        if (isLastCard) {
-          addFinishedGoodsStock(wo.product, wo.quantity);
-        }
+          const completedCount = updatedCards.filter(jc => jc.status === 'Completed').length;
+          const isLastCard = completedCount === updatedCards.length;
+          const completedJC = wo.jobCards.find(jc => jc.id === jcId);
 
-        const updatedWO = {
-          ...wo,
-          status: finalStatus,
-          produced: producedCount,
-          jobCards: updatedCards
-        };
+          if (completedJC && completedJC.operation === 'Mixing') {
+            deductBOMResources(wo.bomNo, wo.quantity, 'Mixing');
+          }
 
-        frappe.syncWorkOrderToERP(updatedWO);
-        return updatedWO;
-      });
-    });
+          if (completedJC && completedJC.operation === 'Can/Bottle Prep') {
+            deductBOMResources(wo.bomNo, wo.quantity, 'Can/Bottle Prep');
+          }
 
-    frappe.syncJobCardToERP(jcId, 'Completed', finalRemarks);
-    setActiveJCOp(null);
-    setOperatorName('');
-    setOperatorRemarks('');
-    setJcActualStartTime('');
-    setJcActualEndTime('');
+          if (isLastCard) {
+            addFinishedGoodsStock(wo.product, wo.quantity);
+          }
+
+          return {
+            ...wo,
+            status: isLastCard ? 'Completed' : 'In Process',
+            produced: isLastCard ? wo.quantity : wo.produced,
+            jobCards: updatedCards
+          };
+        }));
+      }
+
+      setActiveJCOp(null);
+      setOperatorName('');
+      setOperatorEmployeeId('');
+      setOperatorRemarks('');
+      setJcActualStartTime('');
+      setJcActualEndTime('');
+    } catch (err) {
+      showAlert(`Failed to finish Job Card: ${err.message}`, 'error', 'ERPNext Error');
+      loadWorkOrders();
+    }
   };
 
-  const handleAddRemarkJobCard = (woId, jcId, operator, remarksText) => {
+  const handleAddRemarkJobCard = async (woId, jcId, operator, remarksText) => {
     const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
     const cleanOp = operator || currentUser;
     const cleanRemarks = remarksText || 'Comment added.';
     const log = {
       timestamp,
       operator: cleanOp,
-      text: cleanRemarks,
-      actualStartTime: jcActualStartTime,
-      actualEndTime: jcActualEndTime
+      text: cleanRemarks
     };
 
-    let finalRemarks = '';
     setWorkOrders(prevWOs => prevWOs.map(wo => {
       if (wo.id !== woId) return wo;
 
       const updatedJobCards = wo.jobCards.map(jc => {
         if (jc.id === jcId) {
           const updatedRemarksList = [...(jc.remarksList || []), log];
-          finalRemarks = formatRemarksList(updatedRemarksList);
           return {
             ...jc,
             remarksList: updatedRemarksList,
-            remarks: finalRemarks,
-            actualStartTime: jcActualStartTime || jc.actualStartTime,
-            actualEndTime: jcActualEndTime || jc.actualEndTime
+            remarks: formatRemarksList(updatedRemarksList)
           };
         }
         return jc;
@@ -2128,10 +2335,15 @@ const handleSearchSeSource = async (idx, query) => {
       return { ...wo, jobCards: updatedJobCards };
     }));
 
-    const targetWO = workOrders.find(wo => wo.id === woId);
-    const targetJC = targetWO?.jobCards?.find(j => j.id === jcId);
-    const currentStatus = targetJC ? targetJC.status : 'Work In Progress';
-    frappe.syncJobCardToERP(jcId, currentStatus, finalRemarks);
+    try {
+      const conn = frappe.getConnectionSettings();
+      if (conn.isLive && conn.connected) {
+        await frappe.addJobCardComment(jcId, cleanRemarks, cleanOp);
+        await loadWorkOrders();
+      }
+    } catch (err) {
+      showAlert(`Failed to add Job Card comment: ${err.message}`, 'error', 'ERPNext Error');
+    }
 
     setActiveJCOp(null);
     setOperatorName('');
@@ -3286,6 +3498,46 @@ const handleSearchSeSource = async (idx, query) => {
                               Start Run
                             </button>
                           )}
+                          {isWorkOrderReadyForFinish(wo) && (
+                            <button
+                              className="primary-btn"
+                              style={{ padding: '6px 12px', fontSize: '12px', backgroundColor: 'var(--success)', borderColor: 'var(--success)' }}
+                              disabled={woActionLoading}
+                              onClick={() => handleFinishWorkOrder(wo)}
+                            >
+                              Finish WO
+                            </button>
+                          )}
+                          {wo.status === 'Stopped' && (
+                            <button
+                              className="secondary-btn"
+                              style={{ padding: '6px 12px', fontSize: '12px' }}
+                              disabled={woActionLoading}
+                              onClick={() => handleChangeWorkOrderStatus(wo, 'Resumed')}
+                            >
+                              Re-open
+                            </button>
+                          )}
+                          {!['Closed', 'Completed', 'Stopped', 'Cancelled'].includes(wo.status) && (
+                            <button
+                              className="secondary-btn"
+                              style={{ padding: '6px 12px', fontSize: '12px' }}
+                              disabled={woActionLoading}
+                              onClick={() => handleChangeWorkOrderStatus(wo, 'Stopped')}
+                            >
+                              Stop
+                            </button>
+                          )}
+                          {wo.status !== 'Closed' && !['Draft', 'Cancelled'].includes(wo.status) && (
+                            <button
+                              className="secondary-btn"
+                              style={{ padding: '6px 12px', fontSize: '12px' }}
+                              disabled={woActionLoading}
+                              onClick={() => handleChangeWorkOrderStatus(wo, 'Closed')}
+                            >
+                              Close
+                            </button>
+                          )}
                           <button
                             className="secondary-btn"
                             style={{ padding: '6px 12px', fontSize: '12px' }}
@@ -3391,7 +3643,7 @@ const handleSearchSeSource = async (idx, query) => {
                                     {JOB_CARD_STARTABLE_STATUSES.includes(jc.status) && (WORK_ORDER_ACTIVE_STATUSES.includes(wo.status) || wo.materialTransferred) && (
                                       <button
                                         className="action-btn-small start"
-                                        onClick={() => handleStartJobCard(wo.id, jc.id)}
+                                        onClick={() => openJobCardAction(wo, jc, 'start')}
                                       >
                                         ▶ Start
                                       </button>
@@ -3403,13 +3655,13 @@ const handleSearchSeSource = async (idx, query) => {
                                         <button
                                           className="action-btn-small"
                                           style={{ backgroundColor: 'var(--warning)', color: '#111' }}
-                                          onClick={() => setActiveJCOp({ woId: wo.id, jcId: jc.id, operation: jc.operation, action: 'pause' })}
+                                          onClick={() => openJobCardAction(wo, jc, 'pause')}
                                         >
                                           ⏸ Pause
                                         </button>
                                         <button
                                           className="action-btn-small complete"
-                                          onClick={() => setActiveJCOp({ woId: wo.id, jcId: jc.id, operation: jc.operation, action: 'finish' })}
+                                          onClick={() => openJobCardAction(wo, jc, 'finish')}
                                         >
                                           ✓ Finish
                                         </button>
@@ -3421,13 +3673,13 @@ const handleSearchSeSource = async (idx, query) => {
                                       <>
                                         <button
                                           className="action-btn-small start"
-                                          onClick={() => handleResumeJobCard(wo.id, jc.id)}
+                                          onClick={() => openJobCardAction(wo, jc, 'resume')}
                                         >
                                           ▶ Resume
                                         </button>
                                         <button
                                           className="action-btn-small complete"
-                                          onClick={() => setActiveJCOp({ woId: wo.id, jcId: jc.id, operation: jc.operation, action: 'finish' })}
+                                          onClick={() => openJobCardAction(wo, jc, 'finish')}
                                         >
                                           ✓ Finish
                                         </button>
@@ -6023,8 +6275,10 @@ const handleSearchSeSource = async (idx, query) => {
           <div className="modal-panel">
             <div className="modal-header">
               <span>
-                {activeJCOp.action === 'pause' && '⏸ Pause Checklist Operation'}
-                {activeJCOp.action === 'finish' && '✓ Log checklist Completion'}
+                {activeJCOp.action === 'start' && '▶ Start Job Card'}
+                {activeJCOp.action === 'pause' && '⏸ Pause Job Card'}
+                {activeJCOp.action === 'resume' && '▶ Resume Job Card'}
+                {activeJCOp.action === 'finish' && '✓ Complete & Submit Job Card'}
                 {activeJCOp.action === 'remark' && '💬 Add Observation Notes / Remark'}
               </span>
               <button style={{ background: 'none', border: 'none', cursor: 'pointer' }} onClick={() => setActiveJCOp(null)}>✕</button>
@@ -6046,62 +6300,79 @@ const handleSearchSeSource = async (idx, query) => {
                 </div>
               )}
 
-              <div className="form-group" style={{ position: 'relative' }}>
-                <label>Operator Name</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  value={operatorName}
-                  onChange={(e) => handleSearchEmployees(e.target.value, 'pauseModal')}
-                  onFocus={() => {
-                    setActiveSearchField('pauseModal');
-                    if (operatorName.trim().length >= 3 || employeeList.length > 0) {
-                      setShowEmployeeDropdown(true);
-                    }
-                  }}
-                  placeholder="e.g. S. Prasad"
-                  required
-                  autoComplete="off"
-                />
-                {showEmployeeDropdown && activeSearchField === 'pauseModal' && employeeList.length > 0 && (
-                  <div style={{
-                    position: 'absolute',
-                    top: '100%',
-                    left: 0,
-                    right: 0,
-                    backgroundColor: 'white',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '6px',
-                    maxHeight: '180px',
-                    overflowY: 'auto',
-                    zIndex: 1000,
-                    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
-                  }}>
-                    {employeeList.map((emp) => (
-                      <div
-                        key={emp.name}
-                        style={{
-                          padding: '8px 12px',
-                          cursor: 'pointer',
-                          fontSize: '12px',
-                          borderBottom: '1px solid #f3f4f6',
-                          color: '#374151'
-                        }}
-                        onMouseDown={() => {
-                          setOperatorName(emp.employee_name);
-                          setShowEmployeeDropdown(false);
-                        }}
-                        className="employee-dropdown-item"
-                      >
-                        <strong>{emp.employee_name}</strong> <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>({emp.name})</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+              {activeJCOp.action === 'start' && (
+                <div className="form-group" style={{ position: 'relative' }}>
+                  <label>Select Employee / Operator</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={operatorName}
+                    onChange={(e) => {
+                      setOperatorEmployeeId('');
+                      handleSearchEmployees(e.target.value, 'pauseModal');
+                    }}
+                    onFocus={() => {
+                      setActiveSearchField('pauseModal');
+                      if (operatorName.trim().length >= 3 || employeeList.length > 0) {
+                        setShowEmployeeDropdown(true);
+                      }
+                    }}
+                    placeholder="Search employee and select from dropdown"
+                    required
+                    autoComplete="off"
+                  />
+                  {operatorEmployeeId && (
+                    <div style={{ fontSize: '11px', color: 'var(--success)', marginTop: '4px', fontWeight: '600' }}>
+                      Selected Employee ID: {operatorEmployeeId}
+                    </div>
+                  )}
+                  {showEmployeeDropdown && activeSearchField === 'pauseModal' && employeeList.length > 0 && (
+                    <div style={{
+                      position: 'absolute',
+                      top: '100%',
+                      left: 0,
+                      right: 0,
+                      backgroundColor: 'white',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: '6px',
+                      maxHeight: '180px',
+                      overflowY: 'auto',
+                      zIndex: 1000,
+                      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+                    }}>
+                      {employeeList.map((emp) => (
+                        <div
+                          key={emp.name}
+                          style={{
+                            padding: '8px 12px',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                            borderBottom: '1px solid #f3f4f6',
+                            color: '#374151'
+                          }}
+                          onMouseDown={() => {
+                            setOperatorName(emp.employee_name || emp.name);
+                            setOperatorEmployeeId(emp.name);
+                            setShowEmployeeDropdown(false);
+                          }}
+                          className="employee-dropdown-item"
+                        >
+                          <strong>{emp.employee_name || emp.name}</strong> <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>({emp.name})</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-                <div>
+              {activeJCOp.action !== 'start' && (
+                <div style={{ padding: '10px', backgroundColor: 'rgba(14, 165, 233, 0.08)', borderRadius: '6px', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                  ERPNext will use the existing Job Card Time Log employee. Pause/Resume/Finish will not create a new employee assignment.
+                </div>
+              )}
+
+              {['start', 'resume'].includes(activeJCOp.action) && (
+                <div style={{ marginBottom: '12px' }}>
                   <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Actual Start Time</label>
                   <input
                     type="datetime-local"
@@ -6109,8 +6380,14 @@ const handleSearchSeSource = async (idx, query) => {
                     value={jcActualStartTime}
                     onChange={(e) => setJcActualStartTime(e.target.value)}
                   />
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                    Used only for Start/Resume. Leave blank to use current ERPNext time.
+                  </div>
                 </div>
-                <div>
+              )}
+
+              {['pause', 'finish'].includes(activeJCOp.action) && (
+                <div style={{ marginBottom: '12px' }}>
                   <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Actual End Time</label>
                   <input
                     type="datetime-local"
@@ -6118,8 +6395,59 @@ const handleSearchSeSource = async (idx, query) => {
                     value={jcActualEndTime}
                     onChange={(e) => setJcActualEndTime(e.target.value)}
                   />
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                    Used only for Pause/Finish. Leave blank to use current ERPNext time.
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {activeJCOp.action === 'finish' && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                  <div>
+                    <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Qty to Manufacture</label>
+                    <input
+                      type="number"
+                      step="0.0001"
+                      className="form-input"
+                      value={jcFinishForQuantity}
+                      onChange={(e) => {
+                        const nextForQty = Number(e.target.value || 0);
+                        const completed = Number(jcFinishCompletedQty || 0);
+                        setJcFinishForQuantity(e.target.value);
+                        setJcFinishProcessLossQty(String(Number(Math.max(0, nextForQty - completed).toFixed(6))));
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Total Completed Qty</label>
+                    <input
+                      type="number"
+                      step="0.0001"
+                      className="form-input"
+                      value={jcFinishCompletedQty}
+                      onChange={(e) => {
+                        const completed = Number(e.target.value || 0);
+                        const forQty = Number(jcFinishForQuantity || 0);
+                        setJcFinishCompletedQty(e.target.value);
+                        setJcFinishProcessLossQty(String(Number(Math.max(0, forQty - completed).toFixed(6))));
+                      }}
+                    />
+                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                      This becomes completed_qty in the Job Card Time Log.
+                    </div>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Process Loss Qty</label>
+                    <input
+                      type="number"
+                      step="0.0001"
+                      className="form-input"
+                      value={jcFinishProcessLossQty}
+                      onChange={(e) => setJcFinishProcessLossQty(e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
 
               <div className="form-group">
                 <label>Observation Notes / Remarks</label>
@@ -6131,7 +6459,11 @@ const handleSearchSeSource = async (idx, query) => {
                   placeholder={
                     activeJCOp.action === 'pause'
                       ? "Enter reason for pause (e.g. mechanical calibration needed, shift change)..."
-                      : "Enter details (e.g. pH check 3.2, seal checks normal)..."
+                      : activeJCOp.action === 'start'
+                        ? "Enter start notes (optional)..."
+                        : activeJCOp.action === 'resume'
+                          ? "Enter resume notes (optional)..."
+                          : "Enter completion details (e.g. pH check 3.2, seal checks normal)..."
                   }
                   required
                 />
@@ -6143,10 +6475,14 @@ const handleSearchSeSource = async (idx, query) => {
                 type="button"
                 className="primary-btn"
                 onClick={() => {
-                  if (activeJCOp.action === 'pause') {
-                    handlePauseJobCard(activeJCOp.woId, activeJCOp.jcId, operatorName, operatorRemarks);
+                  if (activeJCOp.action === 'start') {
+                    handleStartJobCard(activeJCOp.woId, activeJCOp.jcId, operatorName, operatorEmployeeId, operatorRemarks);
+                  } else if (activeJCOp.action === 'pause') {
+                    handlePauseJobCard(activeJCOp.woId, activeJCOp.jcId, operatorName, operatorEmployeeId, operatorRemarks);
+                  } else if (activeJCOp.action === 'resume') {
+                    handleResumeJobCard(activeJCOp.woId, activeJCOp.jcId, operatorName, operatorEmployeeId, operatorRemarks);
                   } else if (activeJCOp.action === 'finish') {
-                    handleFinishJobCard(activeJCOp.woId, activeJCOp.jcId, operatorName, operatorRemarks);
+                    handleFinishJobCard(activeJCOp.woId, activeJCOp.jcId, operatorName, operatorEmployeeId, operatorRemarks);
                   } else if (activeJCOp.action === 'remark') {
                     handleAddRemarkJobCard(activeJCOp.woId, activeJCOp.jcId, operatorName, operatorRemarks);
                   }
@@ -6327,7 +6663,7 @@ const handleSearchSeSource = async (idx, query) => {
                                 color: '#374151'
                               }}
                               onMouseDown={() => {
-                                setOperatorName(emp.employee_name);
+                                setOperatorName(emp.employee_name || emp.name);
                                 setShowEmployeeDropdown(false);
                               }}
                               className="employee-dropdown-item"
@@ -6339,27 +6675,8 @@ const handleSearchSeSource = async (idx, query) => {
                       )}
                     </div>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-                    <div>
-                      <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Actual Start Time</label>
-                      <input
-                        type="datetime-local"
-                        className="form-input"
-                        style={{ padding: '6px', fontSize: '12px' }}
-                        value={jcActualStartTime}
-                        onChange={(e) => setJcActualStartTime(e.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Actual End Time</label>
-                      <input
-                        type="datetime-local"
-                        className="form-input"
-                        style={{ padding: '6px', fontSize: '12px' }}
-                        value={jcActualEndTime}
-                        onChange={(e) => setJcActualEndTime(e.target.value)}
-                      />
-                    </div>
+                  <div style={{ padding: '8px 10px', backgroundColor: 'rgba(14, 165, 233, 0.08)', borderRadius: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                    Remarks do not update Job Card time logs. Start time is controlled by Start/Resume, and end time is controlled by Pause/Finish.
                   </div>
                   <div>
                     <label style={{ fontSize: '11px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Observation Notes</label>
