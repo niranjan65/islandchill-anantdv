@@ -1113,108 +1113,178 @@ function App() {
   //     setWoLoading(false);
   //   }
   // };
+  // const loadWorkOrders = async () => {
+  //   Promise.resolve().then(() => setWoLoading(true));
+
+  //   const conn = frappe.getConnectionSettings();
+
+  //   if (conn.isLive && conn.connected) {
+  //     try {
+  //       const offset = (currentPage - 1) * recordsPerPage;
+  //       const liveWOs = await frappe.getWorkOrders(recordsPerPage, offset);
+
+  //       if (liveWOs) {
+  //         // Dynamic page estimation or count query
+  //         try {
+  //           const count = await frappe.getWorkOrdersCount();
+  //           if (count > 0) {
+  //             setTotalWOPagesLive(Math.max(1, Math.ceil(count / recordsPerPage)));
+  //           } else {
+  //             if (liveWOs.length < recordsPerPage) {
+  //               setTotalWOPagesLive(currentPage);
+  //             } else {
+  //               setTotalWOPagesLive(currentPage + 1);
+  //             }
+  //           }
+  //         } catch (cntErr) {
+  //           console.warn("Failed to fetch Work Orders count from ERPNext:", cntErr);
+  //           if (liveWOs.length < recordsPerPage) {
+  //             setTotalWOPagesLive(currentPage);
+  //           } else {
+  //             setTotalWOPagesLive(currentPage + 1);
+  //           }
+  //         }
+
+  //         const savedLocal = localStorage.getItem('fiji_work_orders');
+  //         const localList = savedLocal ? JSON.parse(savedLocal) : INITIAL_WORK_ORDERS;
+
+  //         const defaultJobCards = [
+  //           { id: 'PO-JOB00601', operation: 'Mixing', station: 'Mixing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //           { id: 'PO-JOB00602', operation: 'Lab Testing', station: 'Lab Testing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //           { id: 'PO-JOB00603', operation: 'Can/Bottle Prep', station: 'Can Preparation Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //           { id: 'PO-JOB00604', operation: 'Filling', station: 'Filling Machine', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //           { id: 'PO-JOB00605', operation: 'Initial Quality Check', station: 'Initial QC Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //           { id: 'PO-JOB00606', operation: 'Warmer', station: 'Warmer Machine', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //           { id: 'PO-JOB00607', operation: 'Laser Labeling', station: 'Labeling Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //           { id: 'PO-JOB00608', operation: 'Final Quality Check', station: 'Final QC Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //           { id: 'PO-JOB00609', operation: 'Hand Packing', station: 'Packing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //           { id: 'PO-JOB00610', operation: 'Palletising', station: 'Palletisation Area', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
+  //           { id: 'PO-JOB00611', operation: 'Store & Dispatch', station: 'Warehouse/Logistics', status: 'Not Started', operator: '', remarks: '', remarksList: [] }
+  //         ];
+
+  //         const merged = await Promise.all(
+  //           liveWOs.map(async (live) => {
+  //             const localMatch = localList.find(l => l.id === live.id);
+
+  //             let realJobCards = null;
+
+  //             try {
+  //               realJobCards = await frappe.getJobCardsForWorkOrder(live.id);
+  //             } catch (jcErr) {
+  //               console.warn(`Failed to fetch Job Cards for Work Order ${live.id}:`, jcErr);
+  //             }
+
+  //             const mergedJobCards =
+  //               realJobCards && realJobCards.length > 0
+  //                 ? realJobCards
+  //                 : localMatch && localMatch.jobCards && localMatch.jobCards.length > 0
+  //                   ? localMatch.jobCards
+  //                   : defaultJobCards;
+
+  //             const materialTransferred = Boolean(
+  //               localMatch?.materialTransferred ||
+  //               localMatch?.stockEntryCreated
+  //             );
+
+  //             return {
+  //               ...live,
+
+  //               // Preserve local material issue flags
+  //               materialTransferred,
+  //               stockEntryCreated: Boolean(localMatch?.stockEntryCreated),
+  //               stockEntryName: localMatch?.stockEntryName || '',
+  //               stockEntryPostingDate: localMatch?.stockEntryPostingDate || '',
+  //               stockEntryPostingTime: localMatch?.stockEntryPostingTime || '',
+
+  //               // Trust ERPNext status after Stock Entry submission
+  //               status: live.status,
+
+  //               jobCards: mergedJobCards
+  //             };
+  //           })
+  //         );
+
+  //         setWorkOrders(merged);
+  //       }
+  //     } catch (err) {
+  //       console.error("Failed to load work orders from ERPNext:", err);
+  //     } finally {
+  //       setWoLoading(false);
+  //     }
+  //   } else {
+  //     setWoLoading(false);
+  //   }
+  // };
+
+
   const loadWorkOrders = async () => {
-    Promise.resolve().then(() => setWoLoading(true));
+  Promise.resolve().then(() => setWoLoading(true));
 
-    const conn = frappe.getConnectionSettings();
+  const conn = frappe.getConnectionSettings();
 
-    if (conn.isLive && conn.connected) {
-      try {
-        const offset = (currentPage - 1) * recordsPerPage;
-        const liveWOs = await frappe.getWorkOrders(recordsPerPage, offset);
+  if (!conn.isLive || !conn.connected) {
+    setWoLoading(false);
+    return;
+  }
 
-        if (liveWOs) {
-          // Dynamic page estimation or count query
-          try {
-            const count = await frappe.getWorkOrdersCount();
-            if (count > 0) {
-              setTotalWOPagesLive(Math.max(1, Math.ceil(count / recordsPerPage)));
-            } else {
-              if (liveWOs.length < recordsPerPage) {
-                setTotalWOPagesLive(currentPage);
-              } else {
-                setTotalWOPagesLive(currentPage + 1);
-              }
-            }
-          } catch (cntErr) {
-            console.warn("Failed to fetch Work Orders count from ERPNext:", cntErr);
-            if (liveWOs.length < recordsPerPage) {
-              setTotalWOPagesLive(currentPage);
-            } else {
-              setTotalWOPagesLive(currentPage + 1);
-            }
-          }
+  try {
+    const offset = (currentPage - 1) * recordsPerPage;
 
-          const savedLocal = localStorage.getItem('fiji_work_orders');
-          const localList = savedLocal ? JSON.parse(savedLocal) : INITIAL_WORK_ORDERS;
+    const result = await frappe.getWorkOrderDashboard(
+      recordsPerPage,
+      offset
+    );
 
-          const defaultJobCards = [
-            { id: 'PO-JOB00601', operation: 'Mixing', station: 'Mixing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-            { id: 'PO-JOB00602', operation: 'Lab Testing', station: 'Lab Testing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-            { id: 'PO-JOB00603', operation: 'Can/Bottle Prep', station: 'Can Preparation Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-            { id: 'PO-JOB00604', operation: 'Filling', station: 'Filling Machine', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-            { id: 'PO-JOB00605', operation: 'Initial Quality Check', station: 'Initial QC Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-            { id: 'PO-JOB00606', operation: 'Warmer', station: 'Warmer Machine', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-            { id: 'PO-JOB00607', operation: 'Laser Labeling', station: 'Labeling Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-            { id: 'PO-JOB00608', operation: 'Final Quality Check', station: 'Final QC Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-            { id: 'PO-JOB00609', operation: 'Hand Packing', station: 'Packing Station', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-            { id: 'PO-JOB00610', operation: 'Palletising', station: 'Palletisation Area', status: 'Not Started', operator: '', remarks: '', remarksList: [] },
-            { id: 'PO-JOB00611', operation: 'Store & Dispatch', station: 'Warehouse/Logistics', status: 'Not Started', operator: '', remarks: '', remarksList: [] }
-          ];
+    const savedLocal = localStorage.getItem("fiji_work_orders");
+    const localList = savedLocal
+      ? JSON.parse(savedLocal)
+      : INITIAL_WORK_ORDERS;
 
-          const merged = await Promise.all(
-            liveWOs.map(async (live) => {
-              const localMatch = localList.find(l => l.id === live.id);
+    const merged = result.data.map((live) => {
+      const localMatch = localList.find((l) => l.id === live.id);
 
-              let realJobCards = null;
+      return {
+        ...live,
 
-              try {
-                realJobCards = await frappe.getJobCardsForWorkOrder(live.id);
-              } catch (jcErr) {
-                console.warn(`Failed to fetch Job Cards for Work Order ${live.id}:`, jcErr);
-              }
+        // Preserve local-only values
+        materialTransferred: Boolean(
+          localMatch?.materialTransferred ||
+          localMatch?.stockEntryCreated
+        ),
 
-              const mergedJobCards =
-                realJobCards && realJobCards.length > 0
-                  ? realJobCards
-                  : localMatch && localMatch.jobCards && localMatch.jobCards.length > 0
-                    ? localMatch.jobCards
-                    : defaultJobCards;
+        stockEntryCreated: Boolean(
+          localMatch?.stockEntryCreated
+        ),
 
-              const materialTransferred = Boolean(
-                localMatch?.materialTransferred ||
-                localMatch?.stockEntryCreated
-              );
+        stockEntryName:
+          localMatch?.stockEntryName || "",
 
-              return {
-                ...live,
+        stockEntryPostingDate:
+          localMatch?.stockEntryPostingDate || "",
 
-                // Preserve local material issue flags
-                materialTransferred,
-                stockEntryCreated: Boolean(localMatch?.stockEntryCreated),
-                stockEntryName: localMatch?.stockEntryName || '',
-                stockEntryPostingDate: localMatch?.stockEntryPostingDate || '',
-                stockEntryPostingTime: localMatch?.stockEntryPostingTime || '',
+        stockEntryPostingTime:
+          localMatch?.stockEntryPostingTime || ""
+      };
+    });
 
-                // Trust ERPNext status after Stock Entry submission
-                status: live.status,
+    setWorkOrders(merged);
 
-                jobCards: mergedJobCards
-              };
-            })
-          );
+    setTotalWOPagesLive(
+      Math.max(
+        1,
+        Math.ceil(result.count / recordsPerPage)
+      )
+    );
 
-          setWorkOrders(merged);
-        }
-      } catch (err) {
-        console.error("Failed to load work orders from ERPNext:", err);
-      } finally {
-        setWoLoading(false);
-      }
-    } else {
-      setWoLoading(false);
-    }
-  };
+  } catch (err) {
+    console.error(
+      "Failed to load Work Order dashboard:",
+      err
+    );
+  } finally {
+    setWoLoading(false);
+  }
+};
 
   const loadMaintenanceTemplatesFromERPNext = async () => {
     const conn = frappe.getConnectionSettings();

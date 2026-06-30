@@ -1665,6 +1665,23 @@ class FrappeService {
     return { success: true, name: `CS-${doctype.replace(/\s+/g, '-').slice(0, 8).toUpperCase()}-${Date.now().toString().slice(-6)}` };
   }
 
+  // Create Standard Form 17 For First Aid record
+  async createFirstAidRecord(data) {
+    if (this.connection.isLive) {
+      try {
+        const response = await this.makeRequest('POST', 'Standard Form 17 For First Aid', '', {
+          ...data,
+          docstatus: 1
+        });
+        return { success: true, name: response.data.name };
+      } catch (e) {
+        console.error('Failed to create Standard Form 17 For First Aid on ERPNext:', e);
+        throw e;
+      }
+    }
+    return { success: true, name: `SAF-FA-${Date.now().toString().slice(-6)}` };
+  }
+
   // Fetch past logs for custom Cleaning and Sanitation DocTypes
   async getCleaningSanitationRecords(doctype, limit = 50, start = 0) {
     if (this.connection.isLive) {
@@ -1711,6 +1728,30 @@ class FrappeService {
     }
     return { success: true };
   }
+
+
+  async getWorkOrderDashboard(limit = 20, start = 0) {
+    const baseUrl = this.resolveUrl(this.connection.url);
+
+    const response = await fetch(
+        `${baseUrl}/api/method/islandchill.api.manufacturing.get_work_order_dashboard?limit=${limit}&start=${start}`,
+        {
+            method: "GET",
+            credentials: "include",
+            headers: {
+                Accept: "application/json",
+            },
+        }
+    );
+
+    if (!response.ok) {
+        throw new Error("Failed to fetch dashboard");
+    }
+
+    const json = await response.json();
+
+    return json.message;
+}
 }
 
 export const frappe = new FrappeService();
