@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build --base=/assets/islandchill/frontend/ && yarn copy-html-entry",
+    "build": "vite build --base=/assets/islandchill/frontend/ && npm run copy-html-entry",
     "lint": "eslint .",
     "preview": "vite preview",
-    "copy-html-entry": "cp ../islandchill/public/frontend/index.html ../islandchill/www/islandchill.html"
+    "copy-html-entry": "node -e \"const fs = require('fs'); fs.copyFileSync('../islandchill/public/frontend/index.html', '../islandchill/www/islandchill.html');\""
   },
   "dependencies": {
     "frappe-react-sdk": "^1.16.0",
